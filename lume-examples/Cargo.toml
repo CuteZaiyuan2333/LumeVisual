@@ -12,3 +12,4 @@ log = { workspace = true }
 env_logger = { workspace = true }
 raw-window-handle = { workspace = true }
 image = { workspace = true }
+glam = { workspace = true }

@@ -31,6 +31,7 @@ impl lume_core::Device for VulkanDevice {
     type RenderPass = crate::VulkanRenderPass;
     type PipelineLayout = crate::VulkanPipelineLayout;
     type GraphicsPipeline = crate::VulkanGraphicsPipeline;
+    type ComputePipeline = crate::VulkanComputePipeline;
     type Semaphore = crate::VulkanSemaphore;
     type Framebuffer = crate::VulkanFramebuffer;
     type TextureView = crate::VulkanTextureView;
@@ -125,14 +126,19 @@ impl lume_core::Device for VulkanDevice {
     }
 
     fn create_render_pass(&self, descriptor: lume_core::device::RenderPassDescriptor) -> Result<Self::RenderPass, &'static str> {
-        let format = match descriptor.color_format {
+        let mut attachments = Vec::new();
+        let mut has_depth = false;
+
+        // Color attachment
+        let color_format = match descriptor.color_format {
             lume_core::device::TextureFormat::Bgra8UnormSrgb => vk::Format::B8G8R8A8_SRGB,
             lume_core::device::TextureFormat::Rgba8UnormSrgb => vk::Format::R8G8B8A8_SRGB,
             lume_core::device::TextureFormat::Rgba8Unorm => vk::Format::R8G8B8A8_UNORM,
+            lume_core::device::TextureFormat::Depth32Float => return Err("Cannot use Depth32Float as color format"),
         };
 
-        let attachment_desc = vk::AttachmentDescription {
-            format,
+        attachments.push(vk::AttachmentDescription {
+            format: color_format,
             samples: vk::SampleCountFlags::TYPE_1,
             load_op: vk::AttachmentLoadOp::CLEAR,
             store_op: vk::AttachmentStoreOp::STORE,
@@ -141,25 +147,65 @@ impl lume_core::Device for VulkanDevice {
             initial_layout: vk::ImageLayout::UNDEFINED,
             final_layout: vk::ImageLayout::PRESENT_SRC_KHR,
             ..Default::default()
-        };
+        });
 
-        let attachment_ref = vk::AttachmentReference {
+        let color_attachment_ref = vk::AttachmentReference {
             attachment: 0,
             layout: vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
         };
 
+        // Depth attachment
+        let mut depth_attachment_ref = vk::AttachmentReference::default();
+        if let Some(df) = descriptor.depth_stencil_format {
+            let depth_format = match df {
+                lume_core::device::TextureFormat::Depth32Float => vk::Format::D32_SFLOAT,
+                _ => return Err("Only Depth32Float is supported for depth stencil format currently"),
+            };
+
+            attachments.push(vk::AttachmentDescription {
+                format: depth_format,
+                samples: vk::SampleCountFlags::TYPE_1,
+                load_op: vk::AttachmentLoadOp::CLEAR,
+                store_op: vk::AttachmentStoreOp::DONT_CARE,
+                stencil_load_op: vk::AttachmentLoadOp::DONT_CARE,
+                stencil_store_op: vk::AttachmentStoreOp::DONT_CARE,
+                initial_layout: vk::ImageLayout::UNDEFINED,
+                final_layout: vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+                ..Default::default()
+            });
+
+            depth_attachment_ref = vk::AttachmentReference {
+                attachment: 1,
+                layout: vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+            };
+            has_depth = true;
+        }
+
         let subpass = vk::SubpassDescription {
             pipeline_bind_point: vk::PipelineBindPoint::GRAPHICS,
             color_attachment_count: 1,
-            p_color_attachments: &attachment_ref,
+            p_color_attachments: &color_attachment_ref,
+            p_depth_stencil_attachment: if has_depth { &depth_attachment_ref } else { std::ptr::null() },
+            ..Default::default()
+        };
+
+        let dependency = vk::SubpassDependency {
+            src_subpass: vk::SUBPASS_EXTERNAL,
+            dst_subpass: 0,
+            src_stage_mask: vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT | vk::PipelineStageFlags::EARLY_FRAGMENT_TESTS,
+            dst_stage_mask: vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT | vk::PipelineStageFlags::EARLY_FRAGMENT_TESTS,
+            src_access_mask: vk::AccessFlags::empty(),
+            dst_access_mask: vk::AccessFlags::COLOR_ATTACHMENT_WRITE | vk::AccessFlags::DEPTH_STENCIL_ATTACHMENT_WRITE,
             ..Default::default()
         };
 
         let create_info = vk::RenderPassCreateInfo {
-            attachment_count: 1,
-            p_attachments: &attachment_desc,
+            attachment_count: attachments.len() as u32,
+            p_attachments: attachments.as_ptr(),
             subpass_count: 1,
             p_subpasses: &subpass,
+            dependency_count: 1,
+            p_dependencies: &dependency,
             ..Default::default()
         };
 
@@ -191,6 +237,34 @@ impl lume_core::Device for VulkanDevice {
         Ok(crate::VulkanPipelineLayout {
             layout,
             set_layouts,
+            device: self.device.clone(),
+        })
+    }
+
+    fn create_compute_pipeline(&self, descriptor: lume_core::device::ComputePipelineDescriptor<Self>) -> Result<Self::ComputePipeline, &'static str> {
+        let entry_name = std::ffi::CString::new("main").unwrap();
+
+        let stage_info = vk::PipelineShaderStageCreateInfo {
+            stage: vk::ShaderStageFlags::COMPUTE,
+            module: descriptor.shader.module,
+            p_name: entry_name.as_ptr(),
+            ..Default::default()
+        };
+
+        let create_info = vk::ComputePipelineCreateInfo {
+            stage: stage_info,
+            layout: descriptor.layout.layout,
+            ..Default::default()
+        };
+
+        let pipelines = unsafe {
+            self.device.create_compute_pipelines(vk::PipelineCache::null(), &[create_info], None)
+                .map_err(|_| "Failed to create compute pipeline")?
+        };
+
+        Ok(crate::VulkanComputePipeline {
+            pipeline: pipelines[0],
+            layout: descriptor.layout.layout,
             device: self.device.clone(),
         })
     }
@@ -296,6 +370,28 @@ impl lume_core::Device for VulkanDevice {
             ..Default::default()
         };
 
+        let depth_stencil_info = if let Some(ds) = &descriptor.depth_stencil {
+            vk::PipelineDepthStencilStateCreateInfo {
+                depth_test_enable: vk::TRUE,
+                depth_write_enable: if ds.depth_write_enabled { vk::TRUE } else { vk::FALSE },
+                depth_compare_op: match ds.depth_compare {
+                    lume_core::device::CompareFunction::Never => vk::CompareOp::NEVER,
+                    lume_core::device::CompareFunction::Less => vk::CompareOp::LESS,
+                    lume_core::device::CompareFunction::Equal => vk::CompareOp::EQUAL,
+                    lume_core::device::CompareFunction::LessEqual => vk::CompareOp::LESS_OR_EQUAL,
+                    lume_core::device::CompareFunction::Greater => vk::CompareOp::GREATER,
+                    lume_core::device::CompareFunction::NotEqual => vk::CompareOp::NOT_EQUAL,
+                    lume_core::device::CompareFunction::GreaterEqual => vk::CompareOp::GREATER_OR_EQUAL,
+                    lume_core::device::CompareFunction::Always => vk::CompareOp::ALWAYS,
+                },
+                depth_bounds_test_enable: vk::FALSE,
+                stencil_test_enable: vk::FALSE,
+                ..Default::default()
+            }
+        } else {
+            vk::PipelineDepthStencilStateCreateInfo::default()
+        };
+
         let create_info = vk::GraphicsPipelineCreateInfo {
             stage_count: 2,
             p_stages: shader_stages.as_ptr(),
@@ -305,6 +401,7 @@ impl lume_core::Device for VulkanDevice {
             p_rasterization_state: &rasterizer,
             p_multisample_state: &multisampling,
             p_color_blend_state: &color_blending,
+            p_depth_stencil_state: &depth_stencil_info,
             p_dynamic_state: &dynamic_state_info,
             layout: descriptor.layout.layout,
             render_pass: descriptor.render_pass.render_pass,
@@ -442,8 +539,14 @@ impl lume_core::Device for VulkanDevice {
                 .map_err(|_| "Failed to create descriptor set layout")?
         };
 
+        let mut entries_map = std::collections::HashMap::new();
+        for entry in &descriptor.entries {
+            entries_map.insert(entry.binding, entry.ty);
+        }
+
         Ok(crate::VulkanBindGroupLayout {
             layout,
+            entries: entries_map,
             device: self.device.clone(),
         })
     }
@@ -476,12 +579,19 @@ impl lume_core::Device for VulkanDevice {
                         offset: 0,
                         range: buffer.size,
                     });
+                    
+                    let descriptor_type = match descriptor.layout.entries.get(&entry.binding) {
+                        Some(lume_core::device::BindingType::UniformBuffer) => vk::DescriptorType::UNIFORM_BUFFER,
+                        Some(lume_core::device::BindingType::StorageBuffer) => vk::DescriptorType::STORAGE_BUFFER,
+                        _ => vk::DescriptorType::UNIFORM_BUFFER,
+                    };
+
                     writes.push(vk::WriteDescriptorSet {
                         dst_set: set,
                         dst_binding: entry.binding,
                         dst_array_element: 0,
                         descriptor_count: 1,
-                        descriptor_type: vk::DescriptorType::UNIFORM_BUFFER, // Should check layout entry ty
+                        descriptor_type,
                         p_buffer_info: &buffer_infos[buffer_infos.len() - 1],
                         ..Default::default()
                     });
@@ -536,6 +646,7 @@ impl lume_core::Device for VulkanDevice {
                 lume_core::device::TextureFormat::Bgra8UnormSrgb => vk::Format::B8G8R8A8_SRGB,
                 lume_core::device::TextureFormat::Rgba8UnormSrgb => vk::Format::R8G8B8A8_SRGB,
                 lume_core::device::TextureFormat::Rgba8Unorm => vk::Format::R8G8B8A8_UNORM,
+                lume_core::device::TextureFormat::Depth32Float => vk::Format::D32_SFLOAT,
             },
             extent: vk::Extent3D {
                 width: descriptor.width,
@@ -551,6 +662,7 @@ impl lume_core::Device for VulkanDevice {
                 if (descriptor.usage.0 & lume_core::device::TextureUsage::TEXTURE_BINDING.0) != 0 { usage |= vk::ImageUsageFlags::SAMPLED; }
                 if (descriptor.usage.0 & lume_core::device::TextureUsage::STORAGE_BINDING.0) != 0 { usage |= vk::ImageUsageFlags::STORAGE; }
                 if (descriptor.usage.0 & lume_core::device::TextureUsage::RENDER_ATTACHMENT.0) != 0 { usage |= vk::ImageUsageFlags::COLOR_ATTACHMENT; }
+                if (descriptor.usage.0 & lume_core::device::TextureUsage::DEPTH_STENCIL_ATTACHMENT.0) != 0 { usage |= vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT; }
                 if (descriptor.usage.0 & lume_core::device::TextureUsage::COPY_SRC.0) != 0 { usage |= vk::ImageUsageFlags::TRANSFER_SRC; }
                 if (descriptor.usage.0 & lume_core::device::TextureUsage::COPY_DST.0) != 0 { usage |= vk::ImageUsageFlags::TRANSFER_DST; }
                 usage
@@ -605,9 +717,16 @@ impl lume_core::Device for VulkanDevice {
             Some(lume_core::device::TextureFormat::Bgra8UnormSrgb) => vk::Format::B8G8R8A8_SRGB,
             Some(lume_core::device::TextureFormat::Rgba8UnormSrgb) => vk::Format::R8G8B8A8_SRGB,
             Some(lume_core::device::TextureFormat::Rgba8Unorm) => vk::Format::R8G8B8A8_UNORM,
+            Some(lume_core::device::TextureFormat::Depth32Float) => vk::Format::D32_SFLOAT,
             None => {
                 vk::Format::R8G8B8A8_UNORM 
             }
+        };
+
+        let aspect_mask = if format == vk::Format::D32_SFLOAT {
+            vk::ImageAspectFlags::DEPTH
+        } else {
+            vk::ImageAspectFlags::COLOR
         };
 
         let create_info = vk::ImageViewCreateInfo {
@@ -616,7 +735,7 @@ impl lume_core::Device for VulkanDevice {
             format,
             components: vk::ComponentMapping::default(),
             subresource_range: vk::ImageSubresourceRange {
-                aspect_mask: vk::ImageAspectFlags::COLOR,
+                aspect_mask,
                 base_mip_level: 0,
                 level_count: 1,
                 base_array_layer: 0,

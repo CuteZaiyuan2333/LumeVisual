@@ -117,7 +117,7 @@ impl Instance for VulkanInstance {
 
     fn request_device(
         &self,
-        surface: &Self::Surface,
+        surface: Option<&Self::Surface>,
     ) -> Result<Self::Device, &'static str> {
         
         let pdevices = unsafe {
@@ -131,15 +131,19 @@ impl Instance for VulkanInstance {
             let props = unsafe { self.instance.get_physical_device_properties(*pdevice) };
             let queue_families = unsafe { self.instance.get_physical_device_queue_family_properties(*pdevice) };
 
-            // Find a queue family that supports Graphics and Present
+            // Find a queue family that supports Graphics (and optionally Present if surface is provided)
             let index = queue_families.iter().enumerate().position(|(i, q)| {
                 let supports_graphics = q.queue_flags.contains(vk::QueueFlags::GRAPHICS);
-                let supports_present = unsafe {
-                    surface.surface_loader.get_physical_device_surface_support(
-                        *pdevice,
-                        i as u32,
-                        surface.surface
-                    ).unwrap_or(false)
+                let supports_present = if let Some(surface) = surface {
+                    unsafe {
+                        surface.surface_loader.get_physical_device_surface_support(
+                            *pdevice,
+                            i as u32,
+                            surface.surface
+                        ).unwrap_or(false)
+                    }
+                } else {
+                    true
                 };
                 supports_graphics && supports_present
             });
@@ -155,16 +159,7 @@ impl Instance for VulkanInstance {
             } else {
                 None
             }
-        }).ok_or("No suitable physical device found (must support Graphics + Present)")?;
-
-        // Logic to clear strict preference if we just want "any" working device
-        // The above logic effectively picks the first match if no Discrete is found later? 
-        // Actually find_map stops at first Some. So it picks the first one that matches queue reqs.
-        // Wait, the logic is slightly flawed for prioritizing Discrete. It will return the first VALID device, 
-        // but if the first valid device is Integration, it returns it.
-        // Ideally we collect all valid, then sort.
-        // For now, let's keep it simple: First valid is fine. 
-        // We can improve selection logic later.
+        }).ok_or("No suitable physical device found")?;
 
         let priorities = [1.0];
         let queue_create_info = vk::DeviceQueueCreateInfo {
@@ -174,9 +169,10 @@ impl Instance for VulkanInstance {
             ..Default::default()
         };
 
-        let device_extension_names = vec![
-            ash::khr::swapchain::NAME.as_ptr(),
-        ];
+        let mut device_extension_names = Vec::new();
+        if surface.is_some() {
+            device_extension_names.push(ash::khr::swapchain::NAME.as_ptr());
+        }
 
         let device_create_info = vk::DeviceCreateInfo {
             p_queue_create_infos: &queue_create_info,

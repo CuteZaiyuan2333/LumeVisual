@@ -6,7 +6,8 @@ use winit::{
 use std::sync::Arc;
 use std::time::SystemTime;
 use image::GenericImageView;
-use lume_core::{Instance, InstanceDescriptor, Backend, Device, device::{SwapchainDescriptor, RenderPassDescriptor, TextureFormat, PipelineLayoutDescriptor, GraphicsPipelineDescriptor, PrimitiveState, PrimitiveTopology, CommandPool, CommandBuffer, FramebufferDescriptor, Swapchain, Buffer, BindGroupLayoutDescriptor, BindGroupLayoutEntry, ShaderStage, BindingType, BindGroupDescriptor, BindGroupEntry, BindingResource, TextureDescriptor, TextureUsage, SamplerDescriptor, FilterMode, AddressMode, TextureViewDescriptor, ImageLayout}};
+use glam::{Mat4, Vec3};
+use lume_core::{Instance, InstanceDescriptor, Backend, Device, device::{SwapchainDescriptor, RenderPassDescriptor, TextureFormat, PipelineLayoutDescriptor, GraphicsPipelineDescriptor, PrimitiveState, PrimitiveTopology, CommandPool, CommandBuffer, FramebufferDescriptor, Swapchain, Buffer, BindGroupLayoutDescriptor, BindGroupLayoutEntry, ShaderStage, BindingType, BindGroupDescriptor, BindGroupEntry, BindingResource, TextureDescriptor, TextureUsage, SamplerDescriptor, FilterMode, AddressMode, TextureViewDescriptor, ImageLayout, DepthStencilState, CompareFunction}};
 use lume_vulkan::{VulkanInstance, VulkanSurface, VulkanDevice, VulkanSwapchain, VulkanShaderModule, VulkanRenderPass, VulkanPipelineLayout, VulkanGraphicsPipeline, VulkanCommandPool, VulkanCommandBuffer, VulkanFramebuffer, VulkanSemaphore, VulkanBindGroupLayout, VulkanBindGroup, VulkanTexture, VulkanTextureView, VulkanSampler};
 
 struct App {
@@ -24,6 +25,8 @@ struct App {
     texture: Option<VulkanTexture>,
     texture_view: Option<VulkanTextureView>,
     sampler: Option<VulkanSampler>,
+    depth_texture: Option<VulkanTexture>,
+    depth_view: Option<VulkanTextureView>,
     bind_group_layout: Option<VulkanBindGroupLayout>,
     bind_group: Option<VulkanBindGroup>,
     start_time: SystemTime,
@@ -39,20 +42,20 @@ impl ApplicationHandler for App {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if self.window.is_none() {
             let window_attributes = Window::default_attributes()
-                .with_title("LumeVisual - Textured Triangle")
+                .with_title("LumeVisual - Textured Cube")
                 .with_inner_size(winit::dpi::LogicalSize::new(800.0, 600.0));
             
             let window = Arc::new(event_loop.create_window(window_attributes).unwrap());
             self.window = Some(window.clone());
 
             let instance_desc = InstanceDescriptor {
-                name: "Textured Triangle",
+                name: "Textured Cube",
                 backend: Backend::Vulkan,
             };
             
             let instance = VulkanInstance::new(instance_desc).expect("Failed to create Lume Instance");
             let surface = instance.create_surface(&window, &window).expect("Failed to create surface");
-            let device = instance.request_device(&surface).expect("Failed to request device");
+            let device = instance.request_device(Some(&surface)).expect("Failed to request device");
 
             // Create Swapchain
             let size = window.inner_size();
@@ -107,6 +110,19 @@ impl ApplicationHandler for App {
                 address_mode_v: AddressMode::Repeat,
             }).expect("Failed to create sampler");
 
+            // Create Depth Texture
+            let depth_texture = device.create_texture(TextureDescriptor {
+                width: size.width,
+                height: size.height,
+                depth: 1,
+                format: TextureFormat::Depth32Float,
+                usage: TextureUsage::DEPTH_STENCIL_ATTACHMENT,
+            }).expect("Failed to create depth texture");
+
+            let depth_view = device.create_texture_view(&depth_texture, TextureViewDescriptor {
+                format: Some(TextureFormat::Depth32Float),
+            }).expect("Failed to create depth view");
+
             // Load Shaders
             let vert_spv = include_bytes!("../../shaders/triangle.vert.spv");
             let frag_spv = include_bytes!("../../shaders/textured.frag.spv");
@@ -120,6 +136,7 @@ impl ApplicationHandler for App {
             // Create Render Pass
             let render_pass = device.create_render_pass(RenderPassDescriptor {
                 color_format: TextureFormat::Bgra8UnormSrgb,
+                depth_stencil_format: Some(TextureFormat::Depth32Float),
             }).expect("Failed to create render pass");
 
             // Create Bind Group Layout
@@ -158,27 +175,77 @@ impl ApplicationHandler for App {
                     topology: PrimitiveTopology::TriangleList,
                 },
                 vertex_layout: Some(lume_core::device::VertexLayout {
-                    array_stride: 16, // (2 + 2) * 4
+                    array_stride: 20, // (3 + 2) * 4
                     attributes: vec![
                         lume_core::device::VertexAttribute {
                             location: 0,
-                            format: lume_core::device::VertexFormat::Float32x2,
+                            format: lume_core::device::VertexFormat::Float32x3,
                             offset: 0,
                         },
                         lume_core::device::VertexAttribute {
                             location: 1,
                             format: lume_core::device::VertexFormat::Float32x2,
-                            offset: 8,
+                            offset: 12,
                         },
                     ],
                 }),
+                depth_stencil: Some(DepthStencilState {
+                    format: TextureFormat::Depth32Float,
+                    depth_write_enabled: true,
+                    depth_compare: CompareFunction::Less,
+                }),
             }).expect("Failed to create pipeline");
 
-            // Create Vertex Buffer
-            let vertices: [f32; 12] = [
-                 0.0, -0.5,  0.5, 0.0,
-                 0.5,  0.5,  1.0, 1.0,
-                -0.5,  0.5,  0.0, 1.0,
+            // Create Cube Vertex Buffer
+            // Format: [x, y, z, u, v]
+            let vertices: [f32; 180] = [
+                // Front face
+                -0.5, -0.5,  0.5, 0.0, 0.0,
+                 0.5, -0.5,  0.5, 1.0, 0.0,
+                 0.5,  0.5,  0.5, 1.0, 1.0,
+                -0.5, -0.5,  0.5, 0.0, 0.0,
+                 0.5,  0.5,  0.5, 1.0, 1.0,
+                -0.5,  0.5,  0.5, 0.0, 1.0,
+
+                // Back face
+                -0.5, -0.5, -0.5, 0.0, 0.0,
+                -0.5,  0.5, -0.5, 0.0, 1.0,
+                 0.5,  0.5, -0.5, 1.0, 1.0,
+                -0.5, -0.5, -0.5, 0.0, 0.0,
+                 0.5,  0.5, -0.5, 1.0, 1.0,
+                 0.5, -0.5, -0.5, 1.0, 0.0,
+
+                // Left face
+                -0.5,  0.5,  0.5, 1.0, 0.0,
+                -0.5,  0.5, -0.5, 1.0, 1.0,
+                -0.5, -0.5, -0.5, 0.0, 1.0,
+                -0.5,  0.5,  0.5, 1.0, 0.0,
+                -0.5, -0.5, -0.5, 0.0, 1.0,
+                -0.5, -0.5,  0.5, 0.0, 0.0,
+
+                // Right face
+                 0.5,  0.5,  0.5, 1.0, 0.0,
+                 0.5, -0.5,  0.5, 0.0, 0.0,
+                 0.5, -0.5, -0.5, 0.0, 1.0,
+                 0.5,  0.5,  0.5, 1.0, 0.0,
+                 0.5, -0.5, -0.5, 0.0, 1.0,
+                 0.5,  0.5, -0.5, 1.0, 1.0,
+
+                // Top face
+                -0.5,  0.5, -0.5, 0.0, 1.0,
+                -0.5,  0.5,  0.5, 0.0, 0.0,
+                 0.5,  0.5,  0.5, 1.0, 0.0,
+                -0.5,  0.5, -0.5, 0.0, 1.0,
+                 0.5,  0.5,  0.5, 1.0, 0.0,
+                 0.5,  0.5, -0.5, 1.0, 1.0,
+
+                // Bottom face
+                -0.5, -0.5, -0.5, 0.0, 1.0,
+                 0.5, -0.5, -0.5, 1.0, 1.0,
+                 0.5, -0.5,  0.5, 1.0, 0.0,
+                -0.5, -0.5, -0.5, 0.0, 1.0,
+                 0.5, -0.5,  0.5, 1.0, 0.0,
+                -0.5, -0.5,  0.5, 0.0, 0.0,
             ];
 
             let vertex_buffer = device.create_buffer(lume_core::device::BufferDescriptor {
@@ -228,7 +295,7 @@ impl ApplicationHandler for App {
                 let view = swapchain.get_view(i as u32);
                 let framebuffer = device.create_framebuffer(FramebufferDescriptor {
                     render_pass: &render_pass,
-                    attachments: &[view],
+                    attachments: &[view, &depth_view],
                     width: size.width,
                     height: size.height,
                 }).expect("Failed to create framebuffer");
@@ -245,7 +312,7 @@ impl ApplicationHandler for App {
 
                 cmd.set_viewport(0.0, 0.0, size.width as f32, size.height as f32);
                 cmd.set_scissor(0, 0, size.width, size.height);
-                cmd.draw(3, 1, 0, 0);
+                cmd.draw(36, 1, 0, 0); // 12 triangles * 3 vertices
                 cmd.end_render_pass();
                 cmd.end().expect("Failed to end command buffer");
 
@@ -269,6 +336,8 @@ impl ApplicationHandler for App {
             self.texture = Some(texture);
             self.texture_view = Some(texture_view);
             self.sampler = Some(sampler);
+            self.depth_texture = Some(depth_texture);
+            self.depth_view = Some(depth_view);
             self.bind_group_layout = Some(bind_group_layout);
             self.bind_group = Some(bind_group);
             self.command_pool = Some(command_pool);
@@ -277,7 +346,8 @@ impl ApplicationHandler for App {
             self.image_available_semaphore = Some(image_available_semaphore);
             self.render_finished_semaphore = Some(render_finished_semaphore);
 
-            log::info!("Hello Triangle stack initialized successfully!");
+            log::info!("Hello Cube stack initialized successfully!");
+            window.request_redraw();
         }
     }
 
@@ -296,21 +366,26 @@ impl ApplicationHandler for App {
                     // 1. Acquire next image
                     let image_index = swapchain.acquire_next_image().expect("Failed to acquire next image");
 
-                    // 2. Update Uniforms
+                    // 2. Update Uniforms (MVP)
                     let now = SystemTime::now();
                     let duration = now.duration_since(self.start_time).unwrap();
                     let time = duration.as_secs_f32();
                     
-                    let c = time.cos();
-                    let s = time.sin();
-                    let matrix: [f32; 16] = [
-                        c,   -s,  0.0, 0.0,
-                        s,   c,   0.0, 0.0,
-                        0.0, 0.0, 1.0, 0.0,
-                        0.0, 0.0, 0.0, 1.0,
-                    ];
+                    let size = self.window.as_ref().unwrap().inner_size();
+                    let aspect = size.width as f32 / size.height as f32;
+                    
+                    // Vulkan NDC: Y is down, Z is 0..1
+                    let mut proj = Mat4::perspective_rh(std::f32::consts::FRAC_PI_4, aspect, 0.1, 100.0);
+                    proj.col_mut(1).y *= -1.0; 
+                    
+                    let view = Mat4::look_at_rh(Vec3::new(2.0, 2.0, 2.0), Vec3::ZERO, Vec3::Z);
+                    let model = Mat4::from_rotation_z(time);
+                    
+                    let mvp = proj * view * model;
+                    let mvp_bytes: [f32; 16] = mvp.to_cols_array();
+
                     self.uniform_buffer.as_ref().unwrap().write_data(0, unsafe {
-                        std::slice::from_raw_parts(matrix.as_ptr() as *const u8, 64)
+                        std::slice::from_raw_parts(mvp_bytes.as_ptr() as *const u8, 64)
                     }).expect("Failed to update uniform buffer");
 
                     // 3. Submit command buffer
@@ -321,7 +396,7 @@ impl ApplicationHandler for App {
                         &[render_finished],
                     ).expect("Failed to submit commands");
 
-                    // 3. Present image
+                    // 4. Present image
                     swapchain.present(image_index).expect("Failed to present image");
                 }
             }
@@ -355,6 +430,8 @@ fn main() {
         texture: None,
         texture_view: None,
         sampler: None,
+        depth_texture: None,
+        depth_view: None,
         bind_group_layout: None,
         bind_group: None,
         start_time: SystemTime::now(),

@@ -29,7 +29,7 @@ pub trait Instance: Sized {
     /// This typically involves picking a physical device that supports the created surface.
     fn request_device(
         &self,
-        surface: &Self::Surface,
+        surface: Option<&Self::Surface>,
     ) -> Result<Self::Device, &'static str>;
 }
 

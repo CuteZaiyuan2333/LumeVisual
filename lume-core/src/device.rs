@@ -6,6 +6,7 @@ pub trait Device: Sized {
     type RenderPass: RenderPass;
     type PipelineLayout: PipelineLayout;
     type GraphicsPipeline: GraphicsPipeline;
+    type ComputePipeline: ComputePipeline;
     type Semaphore: Semaphore;
     type Framebuffer: Framebuffer;
     type TextureView: TextureView;
@@ -31,6 +32,7 @@ pub trait Device: Sized {
     fn create_render_pass(&self, descriptor: RenderPassDescriptor) -> Result<Self::RenderPass, &'static str>;
     fn create_pipeline_layout(&self, descriptor: PipelineLayoutDescriptor<Self>) -> Result<Self::PipelineLayout, &'static str>;
     fn create_graphics_pipeline(&self, descriptor: GraphicsPipelineDescriptor<Self>) -> Result<Self::GraphicsPipeline, &'static str>;
+    fn create_compute_pipeline(&self, descriptor: ComputePipelineDescriptor<Self>) -> Result<Self::ComputePipeline, &'static str>;
     fn create_framebuffer(&self, descriptor: FramebufferDescriptor<Self>) -> Result<Self::Framebuffer, &'static str>;
     fn create_buffer(&self, descriptor: BufferDescriptor) -> Result<Self::Buffer, &'static str>;
     fn create_texture(&self, descriptor: TextureDescriptor) -> Result<Self::Texture, &'static str>;
@@ -61,20 +63,24 @@ pub trait CommandBuffer<D: Device> {
     fn end_render_pass(&mut self);
 
     fn bind_graphics_pipeline(&mut self, pipeline: &D::GraphicsPipeline);
+    fn bind_compute_pipeline(&mut self, pipeline: &D::ComputePipeline);
     fn bind_vertex_buffer(&mut self, buffer: &D::Buffer);
     fn bind_bind_group(&mut self, index: u32, bind_group: &D::BindGroup);
     fn set_viewport(&mut self, x: f32, y: f32, width: f32, height: f32);
-    fn set_scissor(&mut self, x: i32, y: i32, width: u32, height: u32);
+    fn set_scissor(&mut self, x: u32, y: u32, width: u32, height: u32);
     fn draw(&mut self, vertex_count: u32, instance_count: u32, first_vertex: u32, first_instance: u32);
+    fn dispatch(&mut self, x: u32, y: u32, z: u32);
     fn copy_buffer_to_texture(&mut self, source: &D::Buffer, destination: &D::Texture, width: u32, height: u32);
     fn texture_barrier(&mut self, texture: &D::Texture, old_layout: ImageLayout, new_layout: ImageLayout);
+    fn compute_barrier(&mut self);
 }
 
 pub trait ShaderModule {}
 pub trait RenderPass {}
 pub trait PipelineLayout {}
-pub trait GraphicsPipeline {}
-pub trait Semaphore {}
+pub trait GraphicsPipeline: Send + Sync {}
+pub trait ComputePipeline: Send + Sync {}
+pub trait Semaphore: Send + Sync {}
 pub trait Framebuffer {}
 pub trait TextureView {}
 pub trait Texture {
@@ -83,6 +89,7 @@ pub trait Texture {
 pub trait Sampler {}
 pub trait Buffer {
     fn write_data(&self, offset: u64, data: &[u8]) -> Result<(), &'static str>;
+    fn read_data(&self, offset: u64, data: &mut [u8]) -> Result<(), &'static str>;
 }
 pub trait BindGroupLayout {}
 pub trait BindGroup {}
@@ -102,12 +109,15 @@ pub struct FrameSync<D: Device> {
 
 pub struct RenderPassDescriptor {
     pub color_format: TextureFormat,
+    pub depth_stencil_format: Option<TextureFormat>,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum TextureFormat {
     Bgra8UnormSrgb,
     Rgba8UnormSrgb,
     Rgba8Unorm,
+    Depth32Float,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -134,8 +144,9 @@ impl TextureUsage {
     pub const TEXTURE_BINDING: Self = Self(1 << 0);
     pub const STORAGE_BINDING: Self = Self(1 << 1);
     pub const RENDER_ATTACHMENT: Self = Self(1 << 2);
-    pub const COPY_SRC: Self = Self(1 << 3);
-    pub const COPY_DST: Self = Self(1 << 4);
+    pub const DEPTH_STENCIL_ATTACHMENT: Self = Self(1 << 3);
+    pub const COPY_SRC: Self = Self(1 << 4);
+    pub const COPY_DST: Self = Self(1 << 5);
 }
 
 impl std::ops::BitOr for TextureUsage {
@@ -180,6 +191,26 @@ pub struct GraphicsPipelineDescriptor<'a, D: Device> {
     pub layout: &'a D::PipelineLayout,
     pub primitive: PrimitiveState,
     pub vertex_layout: Option<VertexLayout>,
+    pub depth_stencil: Option<DepthStencilState>,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct DepthStencilState {
+    pub format: TextureFormat,
+    pub depth_write_enabled: bool,
+    pub depth_compare: CompareFunction,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub enum CompareFunction {
+    Never,
+    Less,
+    Equal,
+    LessEqual,
+    Greater,
+    NotEqual,
+    GreaterEqual,
+    Always,
 }
 
 pub struct PrimitiveState {
@@ -274,6 +305,7 @@ impl std::ops::BitOr for ShaderStage {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BindingType {
     UniformBuffer,
     StorageBuffer,
@@ -295,4 +327,9 @@ pub enum BindingResource<'a, D: Device> {
     Buffer(&'a D::Buffer),
     TextureView(&'a D::TextureView),
     Sampler(&'a D::Sampler),
+}
+
+pub struct ComputePipelineDescriptor<'a, D: Device> {
+    pub shader: &'a D::ShaderModule,
+    pub layout: &'a D::PipelineLayout,
 }

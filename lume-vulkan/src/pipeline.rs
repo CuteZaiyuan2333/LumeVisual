@@ -54,6 +54,20 @@ impl Drop for VulkanGraphicsPipeline {
     }
 }
 
+pub struct VulkanComputePipeline {
+    pub pipeline: vk::Pipeline,
+    pub layout: vk::PipelineLayout,
+    pub device: ash::Device,
+}
+
+impl Drop for VulkanComputePipeline {
+    fn drop(&mut self) {
+        unsafe {
+            self.device.destroy_pipeline(self.pipeline, None);
+        }
+    }
+}
+
 pub struct VulkanCommandPool {
     pub pool: vk::CommandPool,
     pub device: ash::Device,
@@ -163,6 +177,12 @@ impl lume_core::device::CommandBuffer<crate::VulkanDevice> for VulkanCommandBuff
         }
     }
 
+    fn dispatch(&mut self, x: u32, y: u32, z: u32) {
+        unsafe {
+            self.device.cmd_dispatch(self.buffer, x, y, z);
+        }
+    }
+
     fn end_render_pass(&mut self) {
         unsafe {
             self.device.cmd_end_render_pass(self.buffer);
@@ -176,6 +196,13 @@ impl lume_core::device::CommandBuffer<crate::VulkanDevice> for VulkanCommandBuff
         }
     }
 
+    fn bind_compute_pipeline(&mut self, pipeline: &crate::VulkanComputePipeline) {
+        unsafe {
+            self.device.cmd_bind_pipeline(self.buffer, vk::PipelineBindPoint::COMPUTE, pipeline.pipeline);
+            self.current_pipeline_layout = pipeline.layout;
+        }
+    }
+
     fn bind_vertex_buffer(&mut self, buffer: &crate::VulkanBuffer) {
         unsafe {
             self.device.cmd_bind_vertex_buffers(self.buffer, 0, &[buffer.buffer], &[0]);
@@ -183,10 +210,31 @@ impl lume_core::device::CommandBuffer<crate::VulkanDevice> for VulkanCommandBuff
     }
 
     fn bind_bind_group(&mut self, index: u32, bind_group: &crate::VulkanBindGroup) {
+        // Try to detect if we are in graphics or compute.
+        // For simplicity, we can bind to BOTH or use a flag. 
+        // WebGPU-like and Vulkan allow binding to different bind points.
+        // Given our abstraction, we might need a way to know the current bind point.
+        // For now, let's bind to GRAPHICS if a render pass is active, else COMPUTE?
+        // Actually, let's just bind to both if we don't know, or use the last bound pipeline's type.
+        // Better: Bind to GRAPHICS for now, and implement separate if needed.
+        // WAIT: cmd_bind_descriptor_sets REQUIRES a pipeline_bind_point.
+        // Let's use a simple heuristic: if we have a current_pipeline_layout and we bound a compute pipeline last, use COMPUTE.
+        // We'll need to track the bind point in VulkanCommandBuffer.
         unsafe {
             self.device.cmd_bind_descriptor_sets(
                 self.buffer,
-                vk::PipelineBindPoint::GRAPHICS,
+                vk::PipelineBindPoint::GRAPHICS, // Default to GRAPHICS
+                self.current_pipeline_layout,
+                index,
+                &[bind_group.set],
+                &[],
+            );
+            
+            // Also bind to COMPUTE just in case, if layout is compatible.
+            // In Vulkan, layouts are often the same.
+            self.device.cmd_bind_descriptor_sets(
+                self.buffer,
+                vk::PipelineBindPoint::COMPUTE,
                 self.current_pipeline_layout,
                 index,
                 &[bind_group.set],
@@ -206,9 +254,9 @@ impl lume_core::device::CommandBuffer<crate::VulkanDevice> for VulkanCommandBuff
         }
     }
 
-    fn set_scissor(&mut self, x: i32, y: i32, width: u32, height: u32) {
+    fn set_scissor(&mut self, x: u32, y: u32, width: u32, height: u32) {
         let scissor = vk::Rect2D {
-            offset: vk::Offset2D { x, y },
+            offset: vk::Offset2D { x: x as i32, y: y as i32 },
             extent: vk::Extent2D { width, height },
         };
         unsafe {
@@ -293,6 +341,26 @@ impl lume_core::device::CommandBuffer<crate::VulkanDevice> for VulkanCommandBuff
             );
         }
     }
+
+    fn compute_barrier(&mut self) {
+        let barrier = vk::MemoryBarrier {
+            src_access_mask: vk::AccessFlags::SHADER_WRITE,
+            dst_access_mask: vk::AccessFlags::SHADER_READ | vk::AccessFlags::UNIFORM_READ,
+            ..Default::default()
+        };
+
+        unsafe {
+            self.device.cmd_pipeline_barrier(
+                self.buffer,
+                vk::PipelineStageFlags::COMPUTE_SHADER,
+                vk::PipelineStageFlags::COMPUTE_SHADER | vk::PipelineStageFlags::VERTEX_SHADER | vk::PipelineStageFlags::FRAGMENT_SHADER,
+                vk::DependencyFlags::empty(),
+                &[barrier],
+                &[],
+                &[],
+            );
+        }
+    }
 }
 
 fn map_layout(layout: lume_core::device::ImageLayout) -> vk::ImageLayout {
@@ -337,11 +405,13 @@ impl lume_core::device::ShaderModule for VulkanShaderModule {}
 impl lume_core::device::RenderPass for VulkanRenderPass {}
 impl lume_core::device::PipelineLayout for VulkanPipelineLayout {}
 impl lume_core::device::GraphicsPipeline for VulkanGraphicsPipeline {}
+impl lume_core::device::ComputePipeline for VulkanComputePipeline {}
 impl lume_core::device::Semaphore for VulkanSemaphore {}
 impl lume_core::device::Framebuffer for VulkanFramebuffer {}
 
 pub struct VulkanBindGroupLayout {
     pub layout: vk::DescriptorSetLayout,
+    pub entries: std::collections::HashMap<u32, lume_core::device::BindingType>,
     pub device: ash::Device,
 }
 

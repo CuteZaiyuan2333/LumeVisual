@@ -32,4 +32,20 @@ impl lume_core::device::Buffer for VulkanBuffer {
         }
         Ok(())
     }
+
+    fn read_data(&self, offset: u64, data: &mut [u8]) -> Result<(), &'static str> {
+        unsafe {
+            let ptr = self.device.map_memory(
+                self.memory,
+                offset,
+                data.len() as u64,
+                vk::MemoryMapFlags::empty(),
+            ).map_err(|_| "Failed to map buffer memory for reading")?;
+
+            std::ptr::copy_nonoverlapping(ptr as *const u8, data.as_mut_ptr(), data.len());
+
+            self.device.unmap_memory(self.memory);
+        }
+        Ok(())
+    }
 }
