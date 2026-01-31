@@ -8,8 +8,8 @@ pub trait Device: Sized + Clone {
     type PipelineLayout: PipelineLayout;
     type GraphicsPipeline: GraphicsPipeline;
     type ComputePipeline: ComputePipeline;
-    type CommandPool: CommandPool<CommandBuffer = Self::CommandBuffer>;
-    type CommandBuffer: CommandBuffer;
+    type CommandPool: CommandPool<CommandBuffer = Self::CommandBuffer, Device = Self>;
+    type CommandBuffer: CommandBuffer<Device = Self>;
     type Framebuffer: Framebuffer;
     type Swapchain: Swapchain<TextureView = Self::TextureView>;
     type BindGroupLayout: BindGroupLayout;

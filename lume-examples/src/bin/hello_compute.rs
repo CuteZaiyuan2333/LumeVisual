@@ -1,5 +1,5 @@
 use lume_core::{Instance, InstanceDescriptor, Backend, Device, device::{BufferDescriptor, BufferUsage, ShaderStage, BindingType, BindGroupLayoutDescriptor, BindGroupLayoutEntry, PipelineLayoutDescriptor, ComputePipelineDescriptor, CommandPool, CommandBuffer, BindGroupDescriptor, BindGroupEntry, BindingResource, Buffer}};
-use lume_vulkan::{VulkanInstance, VulkanDevice};
+use lume_vulkan::{VulkanInstance};
 
 fn main() {
     env_logger::init();

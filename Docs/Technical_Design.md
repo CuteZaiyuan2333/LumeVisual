@@ -1,39 +1,36 @@
-# Technical Design: Backend Abstraction
+# LumeVisual: Technical Handoff & Virtual Geometry Guide
 
-## The Trait System
-LumeVisual uses a trait-based abstraction to ensure maximum performance. 
+## Architecture Overview
+LumeVisual is a trait-based rendering engine.
+- `lume-core`: Defines the protocol. Backend agnostic.
+- `lume-vulkan`: Vulkan 1.3 implementation. Uses `ash` and `gpu-allocator`.
+- `lume-adaptrix`: **[Target for next phase]** This module will implement Virtual Geometry.
 
-```mermaid
-graph TD
-    UserCode[User Game Code] --> Core[lume-core Traits]
-    Core --> Vulkan[lume-vulkan impl]
-    Core --> Metal[lume-metal impl]
-```
+## Current Robustness Status
+1. **Synchronization**: Explicit sync is implemented via Semaphores. The example now uses `wait_idle()` per frame to ensure stability. **Next Step**: Implement a Frame-in-Flight system with Fences to improve performance.
+2. **Resource Management**: Buffers and Textures are managed via `gpu-allocator`. Uniform Buffers require alignment (usually 64 or 256 bytes depending on GPU).
+3. **Descriptor Management**: Moved to `lume-vulkan/src/descriptor.rs`. Uses a WebGPU-like BindGroup abstraction.
+4. **Safety**: Fixed critical pointer aliasing in `update_descriptor_sets`.
 
-### Instance & Device
-The `Instance` is the entry point. It creates a `Surface` (window connection) and then requests a `Device`.
-The `Device` is the primary interface for resource creation.
+## For the next AI (Virtual Geometry Developer):
+### High-Level Goal
+Implement a Nanite-like streaming system in `lume-adaptrix`.
 
-### Swapchain & Presentation
-The `Swapchain` is slightly backend-specific in implementation but exposes a common interface for:
-- Acquiring the next image index.
-- Presenting the rendered image.
+### Technical Prerequisites
+1. **Mesh Shading**: You need to enable `VK_EXT_mesh_shader`. Check device features in `instance.rs`.
+2. **GPU Data Structures**: Virtual geometry relies on large `StorageBuffer`s (SSBOs) for cluster data and visibility buffers. 
+3. **Async Compute**: Adaptrix should ideally use a separate compute queue for cluster culling.
+4. **Bindless Textures**: For massive asset streaming, you must implement Bindless Descriptors (`VK_EXT_descriptor_indexing`).
 
-### Commands & Synchronization
-The `CommandBuffer` is the primary unit of work. 
-- **CommandPool**: Managed per-thread to avoid lock contention.
-- **Recording**: Methods like `begin_render_pass`, `draw`, and `end_render_pass` are exposed via traits.
-- **Submission**: The `Device` submits command buffers to the graphics queue.
-- **Synchronization**: Semaphores manage Swapchain image availability and rendering completion.
+### Known Technical Debt / Implementation Notes
+- **Texture Views**: Currently, `VulkanTextureView` only supports basic 2D views. Cubemaps/Arrays need extension.
+- **Error Handling**: Many `.expect()` calls remain in setup code. Consider converting to `LumeResult`.
+- **Memory Aliasing**: The `create_bind_group` implementation uses a stable-pointer workaround. It works but could be more idiomatic using a specialized arena.
 
-### Resource Management
-To ensure high performance and ease of use:
-- **Buffers**: Abstraction for Vertex, Index, and Uniform data.
-- **Descriptors**: Managed via `BindGroup` and `BindGroupLayout` traits (similar to WebGPU) to ensure a high-level, cross-platform shader interface.
-- **Memory Allocation**: Vulkan backend will initially use a simple sub-allocation strategy or integrate VMA (Vulkan Memory Allocator).
-- **Textures**: Support for 2D, 3D, and Cube maps with automatic layout transitions.
+## Getting Started with Adaptrix
+1. Define `Cluster` and `Meshlet` structures in `lume-adaptrix`.
+2. Implement a GPU-driven culling pass using Compute Shaders.
+3. Integrate with the main `lume-vulkan` pipeline via `StorageBuffer` bindings.
 
-## Versioning Decisions
-- **Winit 0.30**: Chosen for its robust `ApplicationHandler` model.
-- **Ash 0.38**: Chosen for native `raw-window-handle 0.6` support and alignment with modern Vulkan practices.
-- **Ray Tracing**: We target Vulkan 1.3 with KHR Ray Tracing extensions.
+---
+*Signed by: LumeVisual Bootstrap Agent (2026-02-01)*

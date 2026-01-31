@@ -65,14 +65,11 @@ impl ApplicationHandler for App {
             }
             WindowEvent::RedrawRequested => {
                 if let (Some(device), Some(swapchain)) = (&self.device, self.swapchain.as_mut()) {
-                    let image_index = swapchain.acquire_next_image().expect("Failed to acquire next image");
+                    let sema = device.create_semaphore().unwrap();
+                    let image_index = swapchain.acquire_next_image(&sema).expect("Failed to acquire next image");
                     
-                    // Note: In a real app we'd need a render pass and framebuffer.
-                    // For a minimal "Hello Window" (blank color), we can just present.
-                    // But usually Vulkan requires an image layout transition to present.
-                    // Let's at least perform a simple submit if we have a command buffer.
-                    
-                    swapchain.present(image_index).expect("Failed to present");
+                    swapchain.present(image_index, &[&sema]).expect("Failed to present");
+                    device.wait_idle().unwrap();
                 }
             }
             _ => (),

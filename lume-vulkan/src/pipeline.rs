@@ -433,25 +433,7 @@ impl lume_core::device::ComputePipeline for VulkanComputePipeline {}
 impl lume_core::device::Semaphore for VulkanSemaphore {}
 impl lume_core::device::Framebuffer for VulkanFramebuffer {}
 
-pub struct VulkanBindGroupLayout {
-    pub layout: vk::DescriptorSetLayout,
-    pub entries: std::collections::HashMap<u32, lume_core::device::BindingType>,
-    pub device: ash::Device,
-}
+// BindGroup and BindGroupLayout moved to descriptor.rs
 
-impl Drop for VulkanBindGroupLayout {
-    fn drop(&mut self) {
-        unsafe {
-            self.device.destroy_descriptor_set_layout(self.layout, None);
-        }
-    }
-}
-
-pub struct VulkanBindGroup {
-    pub set: vk::DescriptorSet,
-}
-
-impl lume_core::device::BindGroupLayout for VulkanBindGroupLayout {}
-impl lume_core::device::BindGroup for VulkanBindGroup {}
 
 // Sampler moved to texture.rs
