@@ -1,8 +1,14 @@
 use ash::vk;
+use gpu_allocator::vulkan::*;
+use std::sync::{Arc, Mutex};
 
 pub struct VulkanTexture {
     pub image: vk::Image,
-    pub memory: vk::DeviceMemory,
+    pub allocation: Allocation,
+    pub format: vk::Format,
+    pub width: u32,
+    pub height: u32,
+    pub allocator: Arc<Mutex<Allocator>>,
     pub device: ash::Device,
 }
 
@@ -10,8 +16,9 @@ impl Drop for VulkanTexture {
     fn drop(&mut self) {
         unsafe {
             self.device.destroy_image(self.image, None);
-            self.device.free_memory(self.memory, None);
         }
+        let allocation = std::mem::replace(&mut self.allocation, Allocation::default());
+        self.allocator.lock().unwrap().free(allocation).expect("Failed to free image memory");
     }
 }
 

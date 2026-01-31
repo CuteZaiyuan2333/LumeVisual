@@ -1,4 +1,5 @@
 use ash::vk;
+use lume_core::{LumeError, LumeResult};
 
 pub struct VulkanShaderModule {
     pub module: vk::ShaderModule,
@@ -81,8 +82,11 @@ impl Drop for VulkanCommandPool {
     }
 }
 
-impl lume_core::device::CommandPool<crate::VulkanDevice> for VulkanCommandPool {
-    fn allocate_command_buffer(&self) -> Result<VulkanCommandBuffer, &'static str> {
+impl lume_core::device::CommandPool for VulkanCommandPool {
+    type Device = crate::VulkanDevice;
+    type CommandBuffer = VulkanCommandBuffer;
+
+    fn allocate_command_buffer(&self) -> LumeResult<Self::CommandBuffer> {
         let allocate_info = vk::CommandBufferAllocateInfo {
             command_pool: self.pool,
             level: vk::CommandBufferLevel::PRIMARY,
@@ -92,7 +96,7 @@ impl lume_core::device::CommandPool<crate::VulkanDevice> for VulkanCommandPool {
 
         let command_buffers = unsafe {
             self.device.allocate_command_buffers(&allocate_info)
-                .map_err(|_| "Failed to allocate command buffer")?
+                .map_err(|e| LumeError::ResourceCreationFailed(format!("Failed to allocate command buffer: {}", e)))?
         };
 
         Ok(VulkanCommandBuffer {
@@ -115,15 +119,17 @@ impl VulkanCommandBuffer {
     }
 }
 
-impl lume_core::device::CommandBuffer<crate::VulkanDevice> for VulkanCommandBuffer {
-    fn reset(&mut self) -> Result<(), &'static str> {
+impl lume_core::device::CommandBuffer for VulkanCommandBuffer {
+    type Device = crate::VulkanDevice;
+
+    fn reset(&mut self) -> LumeResult<()> {
         unsafe {
             self.device.reset_command_buffer(self.buffer, vk::CommandBufferResetFlags::empty())
-                .map_err(|_| "Failed to reset command buffer")
+                .map_err(|e| LumeError::BackendError(format!("Failed to reset command buffer: {}", e)))
         }
     }
 
-    fn begin(&mut self) -> Result<(), &'static str> {
+    fn begin(&mut self) -> LumeResult<()> {
         let begin_info = vk::CommandBufferBeginInfo {
             flags: vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT,
             ..Default::default()
@@ -131,14 +137,14 @@ impl lume_core::device::CommandBuffer<crate::VulkanDevice> for VulkanCommandBuff
 
         unsafe {
             self.device.begin_command_buffer(self.buffer, &begin_info)
-                .map_err(|_| "Failed to begin command buffer")
+                .map_err(|e| LumeError::BackendError(format!("Failed to begin command buffer: {}", e)))
         }
     }
 
-    fn end(&mut self) -> Result<(), &'static str> {
+    fn end(&mut self) -> LumeResult<()> {
         unsafe {
             self.device.end_command_buffer(self.buffer)
-                .map_err(|_| "Failed to end command buffer")
+                .map_err(|e| LumeError::BackendError(format!("Failed to end command buffer: {}", e)))
         }
     }
 
@@ -254,13 +260,24 @@ impl lume_core::device::CommandBuffer<crate::VulkanDevice> for VulkanCommandBuff
         }
     }
 
-    fn set_scissor(&mut self, x: u32, y: u32, width: u32, height: u32) {
+    fn set_scissor(&mut self, x: i32, y: i32, width: u32, height: u32) {
         let scissor = vk::Rect2D {
-            offset: vk::Offset2D { x: x as i32, y: y as i32 },
+            offset: vk::Offset2D { x, y },
             extent: vk::Extent2D { width, height },
         };
         unsafe {
             self.device.cmd_set_scissor(self.buffer, 0, &[scissor]);
+        }
+    }
+
+    fn copy_buffer_to_buffer(&mut self, source: &crate::VulkanBuffer, destination: &crate::VulkanBuffer, size: u64) {
+        let region = vk::BufferCopy {
+            src_offset: 0,
+            dst_offset: 0,
+            size,
+        };
+        unsafe {
+            self.device.cmd_copy_buffer(self.buffer, source.buffer, destination.buffer, &[region]);
         }
     }
 

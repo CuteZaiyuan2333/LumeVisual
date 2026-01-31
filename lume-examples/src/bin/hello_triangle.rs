@@ -7,42 +7,42 @@ use std::sync::Arc;
 use std::time::SystemTime;
 use image::GenericImageView;
 use glam::{Mat4, Vec3};
-use lume_core::{Instance, InstanceDescriptor, Backend, Device, device::{SwapchainDescriptor, RenderPassDescriptor, TextureFormat, PipelineLayoutDescriptor, GraphicsPipelineDescriptor, PrimitiveState, PrimitiveTopology, CommandPool, CommandBuffer, FramebufferDescriptor, Swapchain, Buffer, BindGroupLayoutDescriptor, BindGroupLayoutEntry, ShaderStage, BindingType, BindGroupDescriptor, BindGroupEntry, BindingResource, TextureDescriptor, TextureUsage, SamplerDescriptor, FilterMode, AddressMode, TextureViewDescriptor, ImageLayout, DepthStencilState, CompareFunction}};
-use lume_vulkan::{VulkanInstance, VulkanSurface, VulkanDevice, VulkanSwapchain, VulkanShaderModule, VulkanRenderPass, VulkanPipelineLayout, VulkanGraphicsPipeline, VulkanCommandPool, VulkanCommandBuffer, VulkanFramebuffer, VulkanSemaphore, VulkanBindGroupLayout, VulkanBindGroup, VulkanTexture, VulkanTextureView, VulkanSampler};
+use lume_core::{Instance, InstanceDescriptor, Backend, Device, shader::{compile_shader, ShaderSource}, device::{SwapchainDescriptor, RenderPassDescriptor, TextureFormat, PipelineLayoutDescriptor, GraphicsPipelineDescriptor, PrimitiveState, PrimitiveTopology, CommandPool, CommandBuffer, FramebufferDescriptor, Swapchain, Buffer, BindGroupLayoutDescriptor, BindGroupLayoutEntry, ShaderStage, BindingType, BindGroupDescriptor, BindGroupEntry, BindingResource, TextureDescriptor, TextureUsage, SamplerDescriptor, FilterMode, AddressMode, TextureViewDescriptor, ImageLayout, DepthStencilState, CompareFunction}};
+use lume_vulkan::VulkanInstance;
 
-struct App {
+struct App<I: Instance> {
     window: Option<Arc<Window>>,
-    instance: Option<VulkanInstance>,
-    surface: Option<VulkanSurface>,
-    device: Option<VulkanDevice>,
-    swapchain: Option<VulkanSwapchain>,
-    render_pass: Option<VulkanRenderPass>,
-    pipeline_layout: Option<VulkanPipelineLayout>,
-    pipeline: Option<VulkanGraphicsPipeline>,
-    shaders: Vec<VulkanShaderModule>,
-    vertex_buffer: Option<lume_vulkan::VulkanBuffer>,
-    uniform_buffer: Option<lume_vulkan::VulkanBuffer>,
-    texture: Option<VulkanTexture>,
-    texture_view: Option<VulkanTextureView>,
-    sampler: Option<VulkanSampler>,
-    depth_texture: Option<VulkanTexture>,
-    depth_view: Option<VulkanTextureView>,
-    bind_group_layout: Option<VulkanBindGroupLayout>,
-    bind_group: Option<VulkanBindGroup>,
+    instance: Option<I>,
+    surface: Option<I::Surface>,
+    device: Option<I::Device>,
+    swapchain: Option<<I::Device as Device>::Swapchain>,
+    render_pass: Option<<I::Device as Device>::RenderPass>,
+    pipeline_layout: Option<<I::Device as Device>::PipelineLayout>,
+    pipeline: Option<<I::Device as Device>::GraphicsPipeline>,
+    shaders: Vec<<I::Device as Device>::ShaderModule>,
+    vertex_buffer: Option<<I::Device as Device>::Buffer>,
+    uniform_buffer: Option<<I::Device as Device>::Buffer>,
+    texture: Option<<I::Device as Device>::Texture>,
+    texture_view: Option<<I::Device as Device>::TextureView>,
+    sampler: Option<<I::Device as Device>::Sampler>,
+    depth_texture: Option<<I::Device as Device>::Texture>,
+    depth_view: Option<<I::Device as Device>::TextureView>,
+    bind_group_layout: Option<<I::Device as Device>::BindGroupLayout>,
+    bind_group: Option<<I::Device as Device>::BindGroup>,
     start_time: SystemTime,
     
-    command_pool: Option<VulkanCommandPool>,
-    command_buffers: Vec<VulkanCommandBuffer>,
-    framebuffers: Vec<VulkanFramebuffer>,
-    image_available_semaphore: Option<VulkanSemaphore>,
-    render_finished_semaphore: Option<VulkanSemaphore>,
+    command_pool: Option<<I::Device as Device>::CommandPool>,
+    command_buffers: Vec<<I::Device as Device>::CommandBuffer>,
+    framebuffers: Vec<<I::Device as Device>::Framebuffer>,
+    image_available_semaphore: Option<<I::Device as Device>::Semaphore>,
+    render_finished_semaphore: Option<<I::Device as Device>::Semaphore>,
 }
 
-impl ApplicationHandler for App {
+impl<I: Instance> ApplicationHandler for App<I> {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if self.window.is_none() {
             let window_attributes = Window::default_attributes()
-                .with_title("LumeVisual - Textured Cube")
+                .with_title("LumeVisual - Backend Agnostic Cube")
                 .with_inner_size(winit::dpi::LogicalSize::new(800.0, 600.0));
             
             let window = Arc::new(event_loop.create_window(window_attributes).unwrap());
@@ -53,7 +53,7 @@ impl ApplicationHandler for App {
                 backend: Backend::Vulkan,
             };
             
-            let instance = VulkanInstance::new(instance_desc).expect("Failed to create Lume Instance");
+            let instance = I::new(instance_desc).expect("Failed to create Lume Instance");
             let surface = instance.create_surface(&window, &window).expect("Failed to create surface");
             let device = instance.request_device(Some(&surface)).expect("Failed to request device");
 
@@ -123,15 +123,24 @@ impl ApplicationHandler for App {
                 format: Some(TextureFormat::Depth32Float),
             }).expect("Failed to create depth view");
 
-            // Load Shaders
-            let vert_spv = include_bytes!("../../shaders/triangle.vert.spv");
-            let frag_spv = include_bytes!("../../shaders/textured.frag.spv");
+            // Load & Compile Shaders using Naga
+            let vert_glsl = include_str!("../../shaders/triangle.vert");
+            let frag_glsl = include_str!("../../shaders/textured.frag");
 
-            let vert_code = unsafe { std::slice::from_raw_parts(vert_spv.as_ptr() as *const u32, vert_spv.len() / 4) };
-            let frag_code = unsafe { std::slice::from_raw_parts(frag_spv.as_ptr() as *const u32, frag_spv.len() / 4) };
+            let vert_spv = compile_shader(ShaderSource::Glsl {
+                source: vert_glsl,
+                stage: naga::ShaderStage::Vertex,
+                defines: naga::FastHashMap::default(),
+            }).expect("Failed to compile vertex shader");
 
-            let vert_module = device.create_shader_module(vert_code).expect("Failed to create vert shader");
-            let frag_module = device.create_shader_module(frag_code).expect("Failed to create frag shader");
+            let frag_spv = compile_shader(ShaderSource::Glsl {
+                source: frag_glsl,
+                stage: naga::ShaderStage::Fragment,
+                defines: naga::FastHashMap::default(),
+            }).expect("Failed to compile fragment shader");
+
+            let vert_module = device.create_shader_module(&vert_spv).expect("Failed to create vert shader");
+            let frag_module = device.create_shader_module(&frag_spv).expect("Failed to create frag shader");
 
             // Create Render Pass
             let render_pass = device.create_render_pass(RenderPassDescriptor {
@@ -197,7 +206,6 @@ impl ApplicationHandler for App {
             }).expect("Failed to create pipeline");
 
             // Create Cube Vertex Buffer
-            // Format: [x, y, z, u, v]
             let vertices: [f32; 180] = [
                 // Front face
                 -0.5, -0.5,  0.5, 0.0, 0.0,
@@ -206,7 +214,6 @@ impl ApplicationHandler for App {
                 -0.5, -0.5,  0.5, 0.0, 0.0,
                  0.5,  0.5,  0.5, 1.0, 1.0,
                 -0.5,  0.5,  0.5, 0.0, 1.0,
-
                 // Back face
                 -0.5, -0.5, -0.5, 0.0, 0.0,
                 -0.5,  0.5, -0.5, 0.0, 1.0,
@@ -214,7 +221,6 @@ impl ApplicationHandler for App {
                 -0.5, -0.5, -0.5, 0.0, 0.0,
                  0.5,  0.5, -0.5, 1.0, 1.0,
                  0.5, -0.5, -0.5, 1.0, 0.0,
-
                 // Left face
                 -0.5,  0.5,  0.5, 1.0, 0.0,
                 -0.5,  0.5, -0.5, 1.0, 1.0,
@@ -222,7 +228,6 @@ impl ApplicationHandler for App {
                 -0.5,  0.5,  0.5, 1.0, 0.0,
                 -0.5, -0.5, -0.5, 0.0, 1.0,
                 -0.5, -0.5,  0.5, 0.0, 0.0,
-
                 // Right face
                  0.5,  0.5,  0.5, 1.0, 0.0,
                  0.5, -0.5,  0.5, 0.0, 0.0,
@@ -230,7 +235,6 @@ impl ApplicationHandler for App {
                  0.5,  0.5,  0.5, 1.0, 0.0,
                  0.5, -0.5, -0.5, 0.0, 1.0,
                  0.5,  0.5, -0.5, 1.0, 1.0,
-
                 // Top face
                 -0.5,  0.5, -0.5, 0.0, 1.0,
                 -0.5,  0.5,  0.5, 0.0, 0.0,
@@ -238,7 +242,6 @@ impl ApplicationHandler for App {
                 -0.5,  0.5, -0.5, 0.0, 1.0,
                  0.5,  0.5,  0.5, 1.0, 0.0,
                  0.5,  0.5, -0.5, 1.0, 1.0,
-
                 // Bottom face
                 -0.5, -0.5, -0.5, 0.0, 1.0,
                  0.5, -0.5, -0.5, 1.0, 1.0,
@@ -287,11 +290,11 @@ impl ApplicationHandler for App {
             // Create Command Pool
             let command_pool = device.create_command_pool().expect("Failed to create command pool");
 
-            // Create Framebuffers and Command Buffers for each swapchain image
+            // Create Framebuffers and Command Buffers
             let mut framebuffers = Vec::new();
             let mut command_buffers = Vec::new();
 
-            for i in 0..3 { // Assuming 3 images for now, should use image_count
+            for i in 0..3 { 
                 let view = swapchain.get_view(i as u32);
                 let framebuffer = device.create_framebuffer(FramebufferDescriptor {
                     render_pass: &render_pass,
@@ -302,17 +305,14 @@ impl ApplicationHandler for App {
                 
                 let mut cmd = command_pool.allocate_command_buffer().expect("Failed to allocate command buffer");
                 
-                // Record commands
                 cmd.begin().expect("Failed to begin command buffer");
                 cmd.begin_render_pass(&render_pass, &framebuffer, [0.1, 0.2, 0.3, 1.0]);
                 cmd.bind_graphics_pipeline(&pipeline);
                 cmd.bind_vertex_buffer(&vertex_buffer);
-                
                 cmd.bind_bind_group(0, &bind_group);
-
                 cmd.set_viewport(0.0, 0.0, size.width as f32, size.height as f32);
                 cmd.set_scissor(0, 0, size.width, size.height);
-                cmd.draw(36, 1, 0, 0); // 12 triangles * 3 vertices
+                cmd.draw(36, 1, 0, 0); 
                 cmd.end_render_pass();
                 cmd.end().expect("Failed to end command buffer");
 
@@ -346,7 +346,7 @@ impl ApplicationHandler for App {
             self.image_available_semaphore = Some(image_available_semaphore);
             self.render_finished_semaphore = Some(render_finished_semaphore);
 
-            log::info!("Hello Cube stack initialized successfully!");
+            log::info!("Backend Agnostic Cube initialized successfully!");
             window.request_redraw();
         }
     }
@@ -363,10 +363,8 @@ impl ApplicationHandler for App {
                     &self.image_available_semaphore,
                     &self.render_finished_semaphore,
                 ) {
-                    // 1. Acquire next image
                     let image_index = swapchain.acquire_next_image().expect("Failed to acquire next image");
 
-                    // 2. Update Uniforms (MVP)
                     let now = SystemTime::now();
                     let duration = now.duration_since(self.start_time).unwrap();
                     let time = duration.as_secs_f32();
@@ -374,7 +372,6 @@ impl ApplicationHandler for App {
                     let size = self.window.as_ref().unwrap().inner_size();
                     let aspect = size.width as f32 / size.height as f32;
                     
-                    // Vulkan NDC: Y is down, Z is 0..1
                     let mut proj = Mat4::perspective_rh(std::f32::consts::FRAC_PI_4, aspect, 0.1, 100.0);
                     proj.col_mut(1).y *= -1.0; 
                     
@@ -388,7 +385,6 @@ impl ApplicationHandler for App {
                         std::slice::from_raw_parts(mvp_bytes.as_ptr() as *const u8, 64)
                     }).expect("Failed to update uniform buffer");
 
-                    // 3. Submit command buffer
                     let cmd = &self.command_buffers[image_index as usize];
                     device.submit(
                         &[cmd],
@@ -396,14 +392,12 @@ impl ApplicationHandler for App {
                         &[render_finished],
                     ).expect("Failed to submit commands");
 
-                    // 4. Present image
                     swapchain.present(image_index).expect("Failed to present image");
                 }
             }
             _ => (),
         }
         
-        // Request another frame
         if let Some(window) = &self.window {
             window.request_redraw();
         }
@@ -412,10 +406,10 @@ impl ApplicationHandler for App {
 
 fn main() {
     env_logger::init();
-    log::info!("Starting Hello Triangle Example");
+    log::info!("Starting Hello Triangle Example (Backend Agnostic)");
 
     let event_loop = EventLoop::new().unwrap();
-    let mut app = App { 
+    let mut app = App::<VulkanInstance> { 
         window: None, 
         instance: None, 
         surface: None, 

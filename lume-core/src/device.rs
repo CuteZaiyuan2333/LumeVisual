@@ -1,45 +1,45 @@
-pub trait Device: Sized {
-    type CommandBuffer: CommandBuffer<Self>;
-    type CommandPool: CommandPool<Self>;
-    type Swapchain: Swapchain;
+pub trait Device: Sized + Clone {
+    type Buffer: Buffer;
+    type Texture: Texture;
+    type TextureView: TextureView;
+    type Sampler: Sampler;
     type ShaderModule: ShaderModule;
     type RenderPass: RenderPass;
     type PipelineLayout: PipelineLayout;
     type GraphicsPipeline: GraphicsPipeline;
     type ComputePipeline: ComputePipeline;
-    type Semaphore: Semaphore;
+    type CommandPool: CommandPool<CommandBuffer = Self::CommandBuffer>;
+    type CommandBuffer: CommandBuffer;
     type Framebuffer: Framebuffer;
-    type TextureView: TextureView;
-    type Texture: Texture;
-    type Sampler: Sampler;
-    type Buffer: Buffer;
+    type Swapchain: Swapchain<TextureView = Self::TextureView>;
     type BindGroupLayout: BindGroupLayout;
     type BindGroup: BindGroup;
+    type Semaphore: Semaphore;
 
     /// Wait for the device to be idle.
-    fn wait_idle(&self) -> Result<(), &'static str>;
+    fn wait_idle(&self) -> crate::LumeResult<()>;
 
-    fn create_command_pool(&self) -> Result<Self::CommandPool, &'static str>;
-    fn create_semaphore(&self) -> Result<Self::Semaphore, &'static str>;
+    fn create_command_pool(&self) -> crate::LumeResult<Self::CommandPool>;
+    fn create_semaphore(&self) -> crate::LumeResult<Self::Semaphore>;
 
     fn create_swapchain(
         &self,
         surface: &impl crate::instance::Surface,
         descriptor: SwapchainDescriptor,
-    ) -> Result<Self::Swapchain, &'static str>;
+    ) -> crate::LumeResult<Self::Swapchain>;
 
-    fn create_shader_module(&self, code: &[u32]) -> Result<Self::ShaderModule, &'static str>;
-    fn create_render_pass(&self, descriptor: RenderPassDescriptor) -> Result<Self::RenderPass, &'static str>;
-    fn create_pipeline_layout(&self, descriptor: PipelineLayoutDescriptor<Self>) -> Result<Self::PipelineLayout, &'static str>;
-    fn create_graphics_pipeline(&self, descriptor: GraphicsPipelineDescriptor<Self>) -> Result<Self::GraphicsPipeline, &'static str>;
-    fn create_compute_pipeline(&self, descriptor: ComputePipelineDescriptor<Self>) -> Result<Self::ComputePipeline, &'static str>;
-    fn create_framebuffer(&self, descriptor: FramebufferDescriptor<Self>) -> Result<Self::Framebuffer, &'static str>;
-    fn create_buffer(&self, descriptor: BufferDescriptor) -> Result<Self::Buffer, &'static str>;
-    fn create_texture(&self, descriptor: TextureDescriptor) -> Result<Self::Texture, &'static str>;
-    fn create_texture_view(&self, texture: &Self::Texture, descriptor: TextureViewDescriptor) -> Result<Self::TextureView, &'static str>;
-    fn create_sampler(&self, descriptor: SamplerDescriptor) -> Result<Self::Sampler, &'static str>;
-    fn create_bind_group_layout(&self, descriptor: BindGroupLayoutDescriptor) -> Result<Self::BindGroupLayout, &'static str>;
-    fn create_bind_group(&self, descriptor: BindGroupDescriptor<Self>) -> Result<Self::BindGroup, &'static str>;
+    fn create_shader_module(&self, code: &[u32]) -> crate::LumeResult<Self::ShaderModule>;
+    fn create_render_pass(&self, descriptor: RenderPassDescriptor) -> crate::LumeResult<Self::RenderPass>;
+    fn create_pipeline_layout(&self, descriptor: PipelineLayoutDescriptor<Self>) -> crate::LumeResult<Self::PipelineLayout>;
+    fn create_graphics_pipeline(&self, descriptor: GraphicsPipelineDescriptor<Self>) -> crate::LumeResult<Self::GraphicsPipeline>;
+    fn create_compute_pipeline(&self, descriptor: ComputePipelineDescriptor<Self>) -> crate::LumeResult<Self::ComputePipeline>;
+    fn create_framebuffer(&self, descriptor: FramebufferDescriptor<Self>) -> crate::LumeResult<Self::Framebuffer>;
+    fn create_buffer(&self, descriptor: BufferDescriptor) -> crate::LumeResult<Self::Buffer>;
+    fn create_texture(&self, descriptor: TextureDescriptor) -> crate::LumeResult<Self::Texture>;
+    fn create_texture_view(&self, texture: &Self::Texture, descriptor: TextureViewDescriptor) -> crate::LumeResult<Self::TextureView>;
+    fn create_sampler(&self, descriptor: SamplerDescriptor) -> crate::LumeResult<Self::Sampler>;
+    fn create_bind_group_layout(&self, descriptor: BindGroupLayoutDescriptor) -> crate::LumeResult<Self::BindGroupLayout>;
+    fn create_bind_group(&self, descriptor: BindGroupDescriptor<Self>) -> crate::LumeResult<Self::BindGroup>;
 
     /// Submit command buffers to the graphics queue.
     fn submit(
@@ -47,31 +47,35 @@ pub trait Device: Sized {
         command_buffers: &[&Self::CommandBuffer],
         wait_semaphores: &[&Self::Semaphore],
         signal_semaphores: &[&Self::Semaphore],
-    ) -> Result<(), &'static str>;
+    ) -> crate::LumeResult<()>;
 }
 
-pub trait CommandPool<D: Device> {
-    fn allocate_command_buffer(&self) -> Result<D::CommandBuffer, &'static str>;
+pub trait CommandPool {
+    type Device: Device;
+    type CommandBuffer: CommandBuffer<Device = Self::Device>;
+    fn allocate_command_buffer(&self) -> crate::LumeResult<Self::CommandBuffer>;
 }
 
-pub trait CommandBuffer<D: Device> {
-    fn reset(&mut self) -> Result<(), &'static str>;
-    fn begin(&mut self) -> Result<(), &'static str>;
-    fn end(&mut self) -> Result<(), &'static str>;
+pub trait CommandBuffer {
+    type Device: Device;
+    fn reset(&mut self) -> crate::LumeResult<()>;
+    fn begin(&mut self) -> crate::LumeResult<()>;
+    fn end(&mut self) -> crate::LumeResult<()>;
 
-    fn begin_render_pass(&mut self, render_pass: &D::RenderPass, framebuffer: &D::Framebuffer, clear_color: [f32; 4]);
+    fn begin_render_pass(&mut self, render_pass: &<Self::Device as Device>::RenderPass, framebuffer: &<Self::Device as Device>::Framebuffer, clear_color: [f32; 4]);
     fn end_render_pass(&mut self);
 
-    fn bind_graphics_pipeline(&mut self, pipeline: &D::GraphicsPipeline);
-    fn bind_compute_pipeline(&mut self, pipeline: &D::ComputePipeline);
-    fn bind_vertex_buffer(&mut self, buffer: &D::Buffer);
-    fn bind_bind_group(&mut self, index: u32, bind_group: &D::BindGroup);
+    fn bind_graphics_pipeline(&mut self, pipeline: &<Self::Device as Device>::GraphicsPipeline);
+    fn bind_compute_pipeline(&mut self, pipeline: &<Self::Device as Device>::ComputePipeline);
+    fn bind_vertex_buffer(&mut self, buffer: &<Self::Device as Device>::Buffer);
+    fn bind_bind_group(&mut self, index: u32, bind_group: &<Self::Device as Device>::BindGroup);
     fn set_viewport(&mut self, x: f32, y: f32, width: f32, height: f32);
-    fn set_scissor(&mut self, x: u32, y: u32, width: u32, height: u32);
+    fn set_scissor(&mut self, x: i32, y: i32, width: u32, height: u32);
     fn draw(&mut self, vertex_count: u32, instance_count: u32, first_vertex: u32, first_instance: u32);
     fn dispatch(&mut self, x: u32, y: u32, z: u32);
-    fn copy_buffer_to_texture(&mut self, source: &D::Buffer, destination: &D::Texture, width: u32, height: u32);
-    fn texture_barrier(&mut self, texture: &D::Texture, old_layout: ImageLayout, new_layout: ImageLayout);
+    fn copy_buffer_to_buffer(&mut self, source: &<Self::Device as Device>::Buffer, destination: &<Self::Device as Device>::Buffer, size: u64);
+    fn copy_buffer_to_texture(&mut self, buffer: &<Self::Device as Device>::Buffer, texture: &<Self::Device as Device>::Texture, width: u32, height: u32);
+    fn texture_barrier(&mut self, texture: &<Self::Device as Device>::Texture, old_layout: ImageLayout, new_layout: ImageLayout);
     fn compute_barrier(&mut self);
 }
 
@@ -88,8 +92,8 @@ pub trait Texture {
 }
 pub trait Sampler {}
 pub trait Buffer {
-    fn write_data(&self, offset: u64, data: &[u8]) -> Result<(), &'static str>;
-    fn read_data(&self, offset: u64, data: &mut [u8]) -> Result<(), &'static str>;
+    fn write_data(&self, offset: u64, data: &[u8]) -> crate::LumeResult<()>;
+    fn read_data(&self, offset: u64, data: &mut [u8]) -> crate::LumeResult<()>;
 }
 pub trait BindGroupLayout {}
 pub trait BindGroup {}
@@ -243,8 +247,8 @@ pub struct VertexLayout {
 
 pub trait Swapchain {
     type TextureView: TextureView;
-    fn present(&mut self, image_index: u32) -> Result<(), &'static str>;
-    fn acquire_next_image(&mut self) -> Result<u32, &'static str>;
+    fn present(&mut self, image_index: u32) -> crate::LumeResult<()>;
+    fn acquire_next_image(&mut self) -> crate::LumeResult<u32>;
     fn get_view(&self, index: u32) -> &Self::TextureView;
 }
 

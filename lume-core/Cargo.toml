@@ -6,3 +6,4 @@ edition = "2024"
 [dependencies]
 raw-window-handle = { workspace = true }
 log = { workspace = true }
+naga = { version = "23.0.0", features = ["wgsl-in", "spv-out", "glsl-in"] }

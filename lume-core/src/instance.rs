@@ -16,21 +16,21 @@ pub trait Instance: Sized {
     type Surface: Surface;
 
     /// Create a new instance of the rendering backend.
-    fn new(descriptor: InstanceDescriptor) -> Result<Self, &'static str>;
+    fn new(descriptor: InstanceDescriptor) -> crate::LumeResult<Self>;
 
     /// Create a surface from a window.
     fn create_surface(
         &self,
         display_handle: impl HasDisplayHandle,
         window_handle: impl HasWindowHandle,
-    ) -> Result<Self::Surface, &'static str>;
+    ) -> crate::LumeResult<Self::Surface>;
 
     /// Request a suitable graphics device.
     /// This typically involves picking a physical device that supports the created surface.
     fn request_device(
         &self,
         surface: Option<&Self::Surface>,
-    ) -> Result<Self::Device, &'static str>;
+    ) -> crate::LumeResult<Self::Device>;
 }
 
 pub trait Surface {}

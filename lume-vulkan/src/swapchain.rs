@@ -1,5 +1,5 @@
 use ash::vk;
-use log::{info, error};
+use log::{info};
 use crate::VulkanTextureView;
 
 pub struct VulkanSwapchain {
@@ -36,7 +36,7 @@ impl Drop for VulkanSwapchain {
 impl lume_core::device::Swapchain for VulkanSwapchain {
     type TextureView = VulkanTextureView;
 
-    fn acquire_next_image(&mut self) -> Result<u32, &'static str> {
+    fn acquire_next_image(&mut self) -> lume_core::LumeResult<u32> {
         let semaphore = self.image_available_semaphores[self.current_frame];
 
         unsafe {
@@ -47,15 +47,12 @@ impl lume_core::device::Swapchain for VulkanSwapchain {
                     semaphore,
                     vk::Fence::null(),
                 )
-                .map_err(|e| {
-                    error!("Failed to acquire next image: {:?}", e);
-                    "Failed to acquire next image"
-                })?;
+                .map_err(|e| lume_core::LumeError::BackendError(format!("Failed to acquire next image: {}", e)))?;
             Ok(index)
         }
     }
 
-    fn present(&mut self, image_index: u32) -> Result<(), &'static str> {
+    fn present(&mut self, image_index: u32) -> lume_core::LumeResult<()> {
         let swapchains = [self.swapchain];
         let image_indices = [image_index];
         
@@ -69,10 +66,7 @@ impl lume_core::device::Swapchain for VulkanSwapchain {
         unsafe {
             self.swapchain_loader
                 .queue_present(self.present_queue, &present_info)
-                .map_err(|e| {
-                    error!("Queue present failed: {:?}", e);
-                    "Queue present failed"
-                })?;
+                .map_err(|e| lume_core::LumeError::BackendError(format!("Queue present failed: {}", e)))?;
         }
         Ok(())
     }

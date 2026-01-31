@@ -1,7 +1,11 @@
-use ash::vk;
-use log::{info, error};
+use ash::{vk};
+use log::{info};
+use std::sync::{Arc, Mutex};
+use gpu_allocator::vulkan::*;
+use gpu_allocator::MemoryLocation;
+use lume_core::{LumeError, LumeResult};
 
-pub struct VulkanDevice {
+pub struct VulkanDeviceInner {
     pub instance: ash::Instance,
     pub device: ash::Device,
     pub physical_device: vk::PhysicalDevice,
@@ -9,12 +13,83 @@ pub struct VulkanDevice {
     pub present_queue: vk::Queue, 
     pub graphics_queue_index: u32,
     pub descriptor_pool: vk::DescriptorPool,
+    pub allocator: Option<Arc<Mutex<Allocator>>>,
 }
 
-impl Drop for VulkanDevice {
+#[derive(Clone)]
+pub struct VulkanDevice {
+    pub inner: Arc<VulkanDeviceInner>,
+}
+
+impl std::ops::Deref for VulkanDevice {
+    type Target = VulkanDeviceInner;
+    fn deref(&self) -> &Self::Target {
+        &self.inner
+    }
+}
+
+impl VulkanDevice {
+    pub fn new(
+        instance: ash::Instance,
+        device: ash::Device,
+        graphics_queue: vk::Queue,
+        present_queue: vk::Queue,
+        graphics_queue_index: u32,
+        allocator: Option<Arc<Mutex<Allocator>>>,
+        physical_device: vk::PhysicalDevice,
+    ) -> Self {
+        let pool_sizes = [
+            vk::DescriptorPoolSize {
+                ty: vk::DescriptorType::UNIFORM_BUFFER,
+                descriptor_count: 1000,
+            },
+            vk::DescriptorPoolSize {
+                ty: vk::DescriptorType::STORAGE_BUFFER,
+                descriptor_count: 1000,
+            },
+            vk::DescriptorPoolSize {
+                ty: vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
+                descriptor_count: 1000,
+            },
+            vk::DescriptorPoolSize {
+                ty: vk::DescriptorType::SAMPLER,
+                descriptor_count: 1000,
+            },
+        ];
+
+        let pool_info = vk::DescriptorPoolCreateInfo {
+            pool_size_count: pool_sizes.len() as u32,
+            p_pool_sizes: pool_sizes.as_ptr(),
+            max_sets: 1000,
+            ..Default::default()
+        };
+
+        let descriptor_pool = unsafe {
+            device.create_descriptor_pool(&pool_info, None).expect("Failed to create descriptor pool")
+        };
+
+        Self {
+            inner: Arc::new(VulkanDeviceInner {
+                instance,
+                device,
+                physical_device,
+                graphics_queue,
+                present_queue,
+                graphics_queue_index,
+                descriptor_pool,
+                allocator,
+            }),
+        }
+    }
+}
+
+impl Drop for VulkanDeviceInner {
     fn drop(&mut self) {
         unsafe {
             info!("Destroying Vulkan Device and Descriptor Pool");
+            // Explicitly drop allocator BEFORE destroying device
+            self.allocator.take();
+            
             self.device.destroy_descriptor_pool(self.descriptor_pool, None);
             self.device.destroy_device(None);
         }
@@ -41,40 +116,40 @@ impl lume_core::Device for VulkanDevice {
     type BindGroupLayout = crate::VulkanBindGroupLayout;
     type BindGroup = crate::VulkanBindGroup;
 
-    fn wait_idle(&self) -> Result<(), &'static str> {
+    fn wait_idle(&self) -> LumeResult<()> {
         unsafe {
-            self.device.device_wait_idle()
-                .map_err(|_| "Failed to wait for device idle")
+            self.inner.device.device_wait_idle()
+                .map_err(|e| LumeError::BackendError(format!("Device wait idle failed: {}", e)))
         }
     }
 
-    fn create_semaphore(&self) -> Result<Self::Semaphore, &'static str> {
+    fn create_semaphore(&self) -> LumeResult<Self::Semaphore> {
         let create_info = vk::SemaphoreCreateInfo::default();
         let semaphore = unsafe {
-            self.device.create_semaphore(&create_info, None)
-                .map_err(|_| "Failed to create semaphore")?
+            self.inner.device.create_semaphore(&create_info, None)
+                .map_err(|e| LumeError::ResourceCreationFailed(format!("Failed to create semaphore: {}", e)))?
         };
         Ok(crate::VulkanSemaphore {
             semaphore,
-            device: self.device.clone(),
+            device: self.inner.device.clone(),
         })
     }
 
-    fn create_command_pool(&self) -> Result<Self::CommandPool, &'static str> {
+    fn create_command_pool(&self) -> LumeResult<Self::CommandPool> {
         let create_info = vk::CommandPoolCreateInfo {
-            queue_family_index: self.graphics_queue_index,
+            queue_family_index: self.inner.graphics_queue_index,
             flags: vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER,
             ..Default::default()
         };
 
         let pool = unsafe {
-            self.device.create_command_pool(&create_info, None)
-                .map_err(|_| "Failed to create command pool")?
+            self.inner.device.create_command_pool(&create_info, None)
+                .map_err(|e| LumeError::ResourceCreationFailed(format!("Failed to create command pool: {}", e)))?
         };
 
         Ok(crate::VulkanCommandPool {
             pool,
-            device: self.device.clone(),
+            device: self.inner.device.clone(),
         })
     }
 
@@ -83,17 +158,17 @@ impl lume_core::Device for VulkanDevice {
         command_buffers: &[&Self::CommandBuffer],
         wait_semaphores: &[&Self::Semaphore],
         signal_semaphores: &[&Self::Semaphore],
-    ) -> Result<(), &'static str> {
+    ) -> LumeResult<()> {
         let vk_command_buffers: Vec<vk::CommandBuffer> = command_buffers.iter().map(|cb| cb.buffer).collect();
         let vk_wait_semaphores: Vec<vk::Semaphore> = wait_semaphores.iter().map(|s| s.semaphore).collect();
         let vk_signal_semaphores: Vec<vk::Semaphore> = signal_semaphores.iter().map(|s| s.semaphore).collect();
 
-        let wait_dst_stage_mask = [vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT];
+        let wait_stages = vec![vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT; vk_wait_semaphores.len()];
 
         let submit_info = vk::SubmitInfo {
             wait_semaphore_count: vk_wait_semaphores.len() as u32,
             p_wait_semaphores: vk_wait_semaphores.as_ptr(),
-            p_wait_dst_stage_mask: wait_dst_stage_mask.as_ptr(),
+            p_wait_dst_stage_mask: wait_stages.as_ptr(),
             command_buffer_count: vk_command_buffers.len() as u32,
             p_command_buffers: vk_command_buffers.as_ptr(),
             signal_semaphore_count: vk_signal_semaphores.len() as u32,
@@ -102,12 +177,12 @@ impl lume_core::Device for VulkanDevice {
         };
 
         unsafe {
-            self.device.queue_submit(self.graphics_queue, &[submit_info], vk::Fence::null())
-                .map_err(|_| "Failed to submit queue")
+            self.inner.device.queue_submit(self.inner.graphics_queue, &[submit_info], vk::Fence::null())
+                .map_err(|e| LumeError::SubmissionFailed(format!("Failed to submit command buffers: {}", e)))
         }
     }
 
-    fn create_shader_module(&self, code: &[u32]) -> Result<Self::ShaderModule, &'static str> {
+    fn create_shader_module(&self, code: &[u32]) -> LumeResult<Self::ShaderModule> {
         let create_info = vk::ShaderModuleCreateInfo {
             code_size: code.len() * 4,
             p_code: code.as_ptr(),
@@ -115,17 +190,17 @@ impl lume_core::Device for VulkanDevice {
         };
 
         let module = unsafe {
-            self.device.create_shader_module(&create_info, None)
-                .map_err(|_| "Failed to create shader module")?
+            self.inner.device.create_shader_module(&create_info, None)
+                .map_err(|e| LumeError::ResourceCreationFailed(format!("Failed to create shader module: {}", e)))?
         };
 
         Ok(crate::VulkanShaderModule {
             module,
-            device: self.device.clone(),
+            device: self.inner.device.clone(),
         })
     }
 
-    fn create_render_pass(&self, descriptor: lume_core::device::RenderPassDescriptor) -> Result<Self::RenderPass, &'static str> {
+    fn create_render_pass(&self, descriptor: lume_core::device::RenderPassDescriptor) -> LumeResult<Self::RenderPass> {
         let mut attachments = Vec::new();
         let mut has_depth = false;
 
@@ -134,7 +209,7 @@ impl lume_core::Device for VulkanDevice {
             lume_core::device::TextureFormat::Bgra8UnormSrgb => vk::Format::B8G8R8A8_SRGB,
             lume_core::device::TextureFormat::Rgba8UnormSrgb => vk::Format::R8G8B8A8_SRGB,
             lume_core::device::TextureFormat::Rgba8Unorm => vk::Format::R8G8B8A8_UNORM,
-            lume_core::device::TextureFormat::Depth32Float => return Err("Cannot use Depth32Float as color format"),
+            lume_core::device::TextureFormat::Depth32Float => return Err(LumeError::Generic("Cannot use Depth32Float as color format")),
         };
 
         attachments.push(vk::AttachmentDescription {
@@ -159,7 +234,7 @@ impl lume_core::Device for VulkanDevice {
         if let Some(df) = descriptor.depth_stencil_format {
             let depth_format = match df {
                 lume_core::device::TextureFormat::Depth32Float => vk::Format::D32_SFLOAT,
-                _ => return Err("Only Depth32Float is supported for depth stencil format currently"),
+                _ => return Err(LumeError::Generic("Only Depth32Float is supported for depth stencil format currently")),
             };
 
             attachments.push(vk::AttachmentDescription {
@@ -210,17 +285,17 @@ impl lume_core::Device for VulkanDevice {
         };
 
         let render_pass = unsafe {
-            self.device.create_render_pass(&create_info, None)
-                .map_err(|_| "Failed to create render pass")?
+            self.inner.device.create_render_pass(&create_info, None)
+                .map_err(|e| LumeError::ResourceCreationFailed(format!("Failed to create render pass: {}", e)))?
         };
 
         Ok(crate::VulkanRenderPass {
             render_pass,
-            device: self.device.clone(),
+            device: self.inner.device.clone(),
         })
     }
 
-    fn create_pipeline_layout(&self, descriptor: lume_core::device::PipelineLayoutDescriptor<Self>) -> Result<Self::PipelineLayout, &'static str> {
+    fn create_pipeline_layout(&self, descriptor: lume_core::device::PipelineLayoutDescriptor<Self>) -> LumeResult<Self::PipelineLayout> {
         let set_layouts: Vec<vk::DescriptorSetLayout> = descriptor.bind_group_layouts.iter().map(|l| l.layout).collect();
         
         let create_info = vk::PipelineLayoutCreateInfo {
@@ -230,18 +305,18 @@ impl lume_core::Device for VulkanDevice {
         };
 
         let layout = unsafe {
-            self.device.create_pipeline_layout(&create_info, None)
-                .map_err(|_| "Failed to create pipeline layout")?
+            self.inner.device.create_pipeline_layout(&create_info, None)
+                .map_err(|e| LumeError::ResourceCreationFailed(format!("Failed to create pipeline layout: {}", e)))?
         };
 
         Ok(crate::VulkanPipelineLayout {
             layout,
             set_layouts,
-            device: self.device.clone(),
+            device: self.inner.device.clone(),
         })
     }
 
-    fn create_compute_pipeline(&self, descriptor: lume_core::device::ComputePipelineDescriptor<Self>) -> Result<Self::ComputePipeline, &'static str> {
+    fn create_compute_pipeline(&self, descriptor: lume_core::device::ComputePipelineDescriptor<Self>) -> LumeResult<Self::ComputePipeline> {
         let entry_name = std::ffi::CString::new("main").unwrap();
 
         let stage_info = vk::PipelineShaderStageCreateInfo {
@@ -258,18 +333,18 @@ impl lume_core::Device for VulkanDevice {
         };
 
         let pipelines = unsafe {
-            self.device.create_compute_pipelines(vk::PipelineCache::null(), &[create_info], None)
-                .map_err(|_| "Failed to create compute pipeline")?
+            self.inner.device.create_compute_pipelines(vk::PipelineCache::null(), &[create_info], None)
+                .map_err(|(_, e)| LumeError::PipelineCreationFailed(format!("Failed to create compute pipeline: {:?}", e)))?
         };
 
         Ok(crate::VulkanComputePipeline {
             pipeline: pipelines[0],
             layout: descriptor.layout.layout,
-            device: self.device.clone(),
+            device: self.inner.device.clone(),
         })
     }
 
-    fn create_graphics_pipeline(&self, descriptor: lume_core::device::GraphicsPipelineDescriptor<Self>) -> Result<Self::GraphicsPipeline, &'static str> {
+    fn create_graphics_pipeline(&self, descriptor: lume_core::device::GraphicsPipelineDescriptor<Self>) -> LumeResult<Self::GraphicsPipeline> {
         let entry_name = std::ffi::CString::new("main").unwrap();
 
         let shader_stages = [
@@ -410,18 +485,18 @@ impl lume_core::Device for VulkanDevice {
         };
 
         let pipelines = unsafe {
-            self.device.create_graphics_pipelines(vk::PipelineCache::null(), &[create_info], None)
-                .map_err(|_| "Failed to create graphics pipeline")?
+            self.inner.device.create_graphics_pipelines(vk::PipelineCache::null(), &[create_info], None)
+                .map_err(|(_, e)| LumeError::PipelineCreationFailed(format!("Failed to create graphics pipeline: {:?}", e)))?
         };
 
         Ok(crate::VulkanGraphicsPipeline {
             pipeline: pipelines[0],
             layout: descriptor.layout.layout,
-            device: self.device.clone(),
+            device: self.inner.device.clone(),
         })
     }
 
-    fn create_framebuffer(&self, descriptor: lume_core::device::FramebufferDescriptor<Self>) -> Result<Self::Framebuffer, &'static str> {
+    fn create_framebuffer(&self, descriptor: lume_core::device::FramebufferDescriptor<Self>) -> LumeResult<Self::Framebuffer> {
         let vk_attachments: Vec<vk::ImageView> = descriptor.attachments.iter().map(|&a| a.view).collect();
 
         let create_info = vk::FramebufferCreateInfo {
@@ -435,26 +510,26 @@ impl lume_core::Device for VulkanDevice {
         };
 
         let framebuffer = unsafe {
-            self.device.create_framebuffer(&create_info, None)
-                .map_err(|_| "Failed to create framebuffer")?
+            self.inner.device.create_framebuffer(&create_info, None)
+                .map_err(|e| LumeError::ResourceCreationFailed(format!("Failed to create framebuffer: {}", e)))?
         };
 
         Ok(crate::VulkanFramebuffer {
             framebuffer,
             width: descriptor.width,
             height: descriptor.height,
-            device: self.device.clone(),
+            device: self.inner.device.clone(),
         })
     }
 
-    fn create_buffer(&self, descriptor: lume_core::device::BufferDescriptor) -> Result<Self::Buffer, &'static str> {
+    fn create_buffer(&self, descriptor: lume_core::device::BufferDescriptor) -> LumeResult<Self::Buffer> {
         let mut usage = vk::BufferUsageFlags::empty();
-        if (descriptor.usage.0 & lume_core::device::BufferUsage::VERTEX.0) != 0 { usage |= vk::BufferUsageFlags::VERTEX_BUFFER; }
-        if (descriptor.usage.0 & lume_core::device::BufferUsage::INDEX.0) != 0 { usage |= vk::BufferUsageFlags::INDEX_BUFFER; }
-        if (descriptor.usage.0 & lume_core::device::BufferUsage::UNIFORM.0) != 0 { usage |= vk::BufferUsageFlags::UNIFORM_BUFFER; }
-        if (descriptor.usage.0 & lume_core::device::BufferUsage::STORAGE.0) != 0 { usage |= vk::BufferUsageFlags::STORAGE_BUFFER; }
-        if (descriptor.usage.0 & lume_core::device::BufferUsage::COPY_SRC.0) != 0 { usage |= vk::BufferUsageFlags::TRANSFER_SRC; }
-        if (descriptor.usage.0 & lume_core::device::BufferUsage::COPY_DST.0) != 0 { usage |= vk::BufferUsageFlags::TRANSFER_DST; }
+        if descriptor.usage.0 & lume_core::device::BufferUsage::VERTEX.0 != 0 { usage |= vk::BufferUsageFlags::VERTEX_BUFFER; }
+        if descriptor.usage.0 & lume_core::device::BufferUsage::INDEX.0 != 0 { usage |= vk::BufferUsageFlags::INDEX_BUFFER; }
+        if descriptor.usage.0 & lume_core::device::BufferUsage::UNIFORM.0 != 0 { usage |= vk::BufferUsageFlags::UNIFORM_BUFFER; }
+        if descriptor.usage.0 & lume_core::device::BufferUsage::STORAGE.0 != 0 { usage |= vk::BufferUsageFlags::STORAGE_BUFFER; }
+        if descriptor.usage.0 & lume_core::device::BufferUsage::COPY_SRC.0 != 0 { usage |= vk::BufferUsageFlags::TRANSFER_SRC; }
+        if descriptor.usage.0 & lume_core::device::BufferUsage::COPY_DST.0 != 0 { usage |= vk::BufferUsageFlags::TRANSFER_DST; }
 
         let create_info = vk::BufferCreateInfo {
             size: descriptor.size,
@@ -464,134 +539,125 @@ impl lume_core::Device for VulkanDevice {
         };
 
         let buffer = unsafe {
-            self.device.create_buffer(&create_info, None)
-                .map_err(|_| "Failed to create buffer")?
+            self.inner.device.create_buffer(&create_info, None)
+                .map_err(|e| LumeError::ResourceCreationFailed(format!("Failed to create buffer: {}", e)))?
         };
 
-        let mem_requirements = unsafe { self.device.get_buffer_memory_requirements(buffer) };
-        let mem_properties = unsafe { self.instance.get_physical_device_memory_properties(self.physical_device) };
-
-        // Find memory type
-        let memory_type_index = (0..mem_properties.memory_type_count)
-            .find(|&i| {
-                let suitable = (mem_requirements.memory_type_bits & (1 << i)) != 0;
-                let properties = mem_properties.memory_types[i as usize].property_flags;
-                // For now, assume we want host visible and coherent for all buffers
-                let required = vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT;
-                suitable && (properties & required) == required
-            })
-            .ok_or("Failed to find suitable memory type")?;
-
-        let alloc_info = vk::MemoryAllocateInfo {
-            allocation_size: mem_requirements.size,
-            memory_type_index,
-            ..Default::default()
+        let requirements = unsafe { self.inner.device.get_buffer_memory_requirements(buffer) };
+        let location = if descriptor.mapped_at_creation {
+            MemoryLocation::CpuToGpu
+        } else {
+            MemoryLocation::GpuOnly
         };
 
-        let memory = unsafe {
-            self.device.allocate_memory(&alloc_info, None)
-                .map_err(|_| "Failed to allocate buffer memory")?
-        };
+        let allocator = self.inner.allocator.as_ref().ok_or_else(|| LumeError::BackendError("Allocator not initialized".to_string()))?;
+        let allocation = allocator.lock().unwrap().allocate(&AllocationCreateDesc {
+            name: "Generic Buffer",
+            requirements,
+            location,
+            linear: true,
+            allocation_scheme: AllocationScheme::GpuAllocatorManaged,
+        }).map_err(|e| LumeError::BackendError(format!("Failed to allocate buffer memory: {}", e)))?;
 
         unsafe {
-            self.device.bind_buffer_memory(buffer, memory, 0)
-                .map_err(|_| "Failed to bind buffer memory")?;
+            self.inner.device.bind_buffer_memory(buffer, allocation.memory(), allocation.offset())
+                .map_err(|e| LumeError::BackendError(format!("Failed to bind buffer memory: {}", e)))?;
         }
 
         Ok(crate::VulkanBuffer {
             buffer,
-            memory,
+            allocation,
             size: descriptor.size,
-            device: self.device.clone(),
+            allocator: allocator.clone(),
+            device: self.inner.device.clone(),
         })
     }
 
-    fn create_bind_group_layout(&self, descriptor: lume_core::device::BindGroupLayoutDescriptor) -> Result<Self::BindGroupLayout, &'static str> {
-        let bindings: Vec<vk::DescriptorSetLayoutBinding> = descriptor.entries.iter().map(|entry| {
-            vk::DescriptorSetLayoutBinding {
+    fn create_bind_group_layout(&self, descriptor: lume_core::device::BindGroupLayoutDescriptor) -> LumeResult<Self::BindGroupLayout> {
+        let mut entries = Vec::new();
+        let mut type_map = std::collections::HashMap::new();
+
+        for entry in descriptor.entries {
+            let vk_type = match entry.ty {
+                lume_core::device::BindingType::UniformBuffer => vk::DescriptorType::UNIFORM_BUFFER,
+                lume_core::device::BindingType::StorageBuffer => vk::DescriptorType::STORAGE_BUFFER,
+                lume_core::device::BindingType::SampledTexture => vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
+                lume_core::device::BindingType::Sampler => vk::DescriptorType::SAMPLER,
+            };
+
+            let mut stage_flags = vk::ShaderStageFlags::empty();
+            if entry.visibility.0 & lume_core::device::ShaderStage::VERTEX.0 != 0 { stage_flags |= vk::ShaderStageFlags::VERTEX; }
+            if entry.visibility.0 & lume_core::device::ShaderStage::FRAGMENT.0 != 0 { stage_flags |= vk::ShaderStageFlags::FRAGMENT; }
+            if entry.visibility.0 & lume_core::device::ShaderStage::COMPUTE.0 != 0 { stage_flags |= vk::ShaderStageFlags::COMPUTE; }
+
+            entries.push(vk::DescriptorSetLayoutBinding {
                 binding: entry.binding,
-                descriptor_type: match entry.ty {
-                    lume_core::device::BindingType::UniformBuffer => vk::DescriptorType::UNIFORM_BUFFER,
-                    lume_core::device::BindingType::StorageBuffer => vk::DescriptorType::STORAGE_BUFFER,
-                    lume_core::device::BindingType::SampledTexture => vk::DescriptorType::SAMPLED_IMAGE,
-                    lume_core::device::BindingType::Sampler => vk::DescriptorType::SAMPLER,
-                },
+                descriptor_type: vk_type,
                 descriptor_count: 1,
-                stage_flags: {
-                    let mut flags = vk::ShaderStageFlags::empty();
-                    if (entry.visibility.0 & lume_core::device::ShaderStage::VERTEX.0) != 0 { flags |= vk::ShaderStageFlags::VERTEX; }
-                    if (entry.visibility.0 & lume_core::device::ShaderStage::FRAGMENT.0) != 0 { flags |= vk::ShaderStageFlags::FRAGMENT; }
-                    if (entry.visibility.0 & lume_core::device::ShaderStage::COMPUTE.0) != 0 { flags |= vk::ShaderStageFlags::COMPUTE; }
-                    flags
-                },
+                stage_flags,
                 ..Default::default()
-            }
-        }).collect();
+            });
+            type_map.insert(entry.binding, entry.ty);
+        }
 
         let create_info = vk::DescriptorSetLayoutCreateInfo {
-            binding_count: bindings.len() as u32,
-            p_bindings: bindings.as_ptr(),
+            binding_count: entries.len() as u32,
+            p_bindings: entries.as_ptr(),
             ..Default::default()
         };
 
         let layout = unsafe {
-            self.device.create_descriptor_set_layout(&create_info, None)
-                .map_err(|_| "Failed to create descriptor set layout")?
+            self.inner.device.create_descriptor_set_layout(&create_info, None)
+                .map_err(|e| LumeError::ResourceCreationFailed(format!("Failed to create bind group layout: {}", e)))?
         };
-
-        let mut entries_map = std::collections::HashMap::new();
-        for entry in &descriptor.entries {
-            entries_map.insert(entry.binding, entry.ty);
-        }
 
         Ok(crate::VulkanBindGroupLayout {
             layout,
-            entries: entries_map,
-            device: self.device.clone(),
+            entries: type_map,
+            device: self.inner.device.clone(),
         })
     }
 
-    fn create_bind_group(&self, descriptor: lume_core::device::BindGroupDescriptor<Self>) -> Result<Self::BindGroup, &'static str> {
-        let set_layouts = [descriptor.layout.layout];
-        let alloc_info = vk::DescriptorSetAllocateInfo {
-            descriptor_pool: self.descriptor_pool,
+    fn create_bind_group(&self, descriptor: lume_core::device::BindGroupDescriptor<Self>) -> LumeResult<Self::BindGroup> {
+        let allocate_info = vk::DescriptorSetAllocateInfo {
+            descriptor_pool: self.inner.descriptor_pool,
             descriptor_set_count: 1,
-            p_set_layouts: set_layouts.as_ptr(),
+            p_set_layouts: &descriptor.layout.layout,
             ..Default::default()
         };
 
         let sets = unsafe {
-            self.device.allocate_descriptor_sets(&alloc_info)
-                .map_err(|_| "Failed to allocate descriptor set")?
+            self.inner.device.allocate_descriptor_sets(&allocate_info)
+                .map_err(|e| LumeError::ResourceCreationFailed(format!("Failed to allocate bind group: {}", e)))?
         };
-        let set = sets[0];
 
+        let set = sets[0];
         let mut writes = Vec::new();
-        // Keep resources alive during update
+        
+        // We need to keep these alive until we call update_descriptor_sets
         let mut buffer_infos = Vec::new();
         let mut image_infos = Vec::new();
 
-        for entry in &descriptor.entries {
+        for entry in descriptor.entries {
+            let ty = descriptor.layout.entries.get(&entry.binding).ok_or_else(|| LumeError::Generic("Unknown binding in bind group"))?;
+            
             match entry.resource {
-                lume_core::device::BindingResource::Buffer(buffer) => {
+                lume_core::device::BindingResource::Buffer(buf) => {
                     buffer_infos.push(vk::DescriptorBufferInfo {
-                        buffer: buffer.buffer,
+                        buffer: buf.buffer,
                         offset: 0,
-                        range: buffer.size,
+                        range: buf.size,
                     });
-                    
-                    let descriptor_type = match descriptor.layout.entries.get(&entry.binding) {
-                        Some(lume_core::device::BindingType::UniformBuffer) => vk::DescriptorType::UNIFORM_BUFFER,
-                        Some(lume_core::device::BindingType::StorageBuffer) => vk::DescriptorType::STORAGE_BUFFER,
-                        _ => vk::DescriptorType::UNIFORM_BUFFER,
+                    let vk_ty = match ty {
+                        lume_core::device::BindingType::UniformBuffer => vk::DescriptorType::UNIFORM_BUFFER,
+                        lume_core::device::BindingType::StorageBuffer => vk::DescriptorType::STORAGE_BUFFER,
+                        _ => return Err(LumeError::Generic("Mismatched binding type for buffer")),
                     };
-
                     writes.push(vk::WriteDescriptorSet {
                         dst_set: set,
                         dst_binding: entry.binding,
-                        dst_array_element: 0,
                         descriptor_count: 1,
-                        descriptor_type,
+                        descriptor_type: vk_ty,
                         p_buffer_info: &buffer_infos[buffer_infos.len() - 1],
                         ..Default::default()
                     });
@@ -605,22 +671,20 @@ impl lume_core::Device for VulkanDevice {
                     writes.push(vk::WriteDescriptorSet {
                         dst_set: set,
                         dst_binding: entry.binding,
-                        dst_array_element: 0,
                         descriptor_count: 1,
-                        descriptor_type: vk::DescriptorType::SAMPLED_IMAGE,
+                        descriptor_type: vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
                         p_image_info: &image_infos[image_infos.len() - 1],
                         ..Default::default()
                     });
                 }
                 lume_core::device::BindingResource::Sampler(sampler) => {
-                    image_infos.push(vk::DescriptorImageInfo {
+                     image_infos.push(vk::DescriptorImageInfo {
                         sampler: sampler.sampler,
                         ..Default::default()
                     });
                     writes.push(vk::WriteDescriptorSet {
                         dst_set: set,
                         dst_binding: entry.binding,
-                        dst_array_element: 0,
                         descriptor_count: 1,
                         descriptor_type: vk::DescriptorType::SAMPLER,
                         p_image_info: &image_infos[image_infos.len() - 1],
@@ -631,109 +695,76 @@ impl lume_core::Device for VulkanDevice {
         }
 
         unsafe {
-            self.device.update_descriptor_sets(&writes, &[]);
+            self.inner.device.update_descriptor_sets(&writes, &[]);
         }
 
-        Ok(crate::VulkanBindGroup {
-            set,
-        })
+        Ok(crate::VulkanBindGroup { set })
     }
 
-    fn create_texture(&self, descriptor: lume_core::device::TextureDescriptor) -> Result<Self::Texture, &'static str> {
+    fn create_texture(&self, descriptor: lume_core::device::TextureDescriptor) -> LumeResult<Self::Texture> {
+        let mut usage = vk::ImageUsageFlags::empty();
+        if descriptor.usage.0 & lume_core::device::TextureUsage::TEXTURE_BINDING.0 != 0 { usage |= vk::ImageUsageFlags::SAMPLED; }
+        if descriptor.usage.0 & lume_core::device::TextureUsage::STORAGE_BINDING.0 != 0 { usage |= vk::ImageUsageFlags::STORAGE; }
+        if descriptor.usage.0 & lume_core::device::TextureUsage::RENDER_ATTACHMENT.0 != 0 { usage |= vk::ImageUsageFlags::COLOR_ATTACHMENT; }
+        if descriptor.usage.0 & lume_core::device::TextureUsage::DEPTH_STENCIL_ATTACHMENT.0 != 0 { usage |= vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT; }
+        if descriptor.usage.0 & lume_core::device::TextureUsage::COPY_SRC.0 != 0 { usage |= vk::ImageUsageFlags::TRANSFER_SRC; }
+        if descriptor.usage.0 & lume_core::device::TextureUsage::COPY_DST.0 != 0 { usage |= vk::ImageUsageFlags::TRANSFER_DST; }
+
         let create_info = vk::ImageCreateInfo {
             image_type: vk::ImageType::TYPE_2D,
-            format: match descriptor.format {
-                lume_core::device::TextureFormat::Bgra8UnormSrgb => vk::Format::B8G8R8A8_SRGB,
-                lume_core::device::TextureFormat::Rgba8UnormSrgb => vk::Format::R8G8B8A8_SRGB,
-                lume_core::device::TextureFormat::Rgba8Unorm => vk::Format::R8G8B8A8_UNORM,
-                lume_core::device::TextureFormat::Depth32Float => vk::Format::D32_SFLOAT,
-            },
-            extent: vk::Extent3D {
-                width: descriptor.width,
-                height: descriptor.height,
-                depth: descriptor.depth,
-            },
+            format: map_texture_format(descriptor.format),
+            extent: vk::Extent3D { width: descriptor.width, height: descriptor.height, depth: 1 },
             mip_levels: 1,
             array_layers: 1,
             samples: vk::SampleCountFlags::TYPE_1,
             tiling: vk::ImageTiling::OPTIMAL,
-            usage: {
-                let mut usage = vk::ImageUsageFlags::empty();
-                if (descriptor.usage.0 & lume_core::device::TextureUsage::TEXTURE_BINDING.0) != 0 { usage |= vk::ImageUsageFlags::SAMPLED; }
-                if (descriptor.usage.0 & lume_core::device::TextureUsage::STORAGE_BINDING.0) != 0 { usage |= vk::ImageUsageFlags::STORAGE; }
-                if (descriptor.usage.0 & lume_core::device::TextureUsage::RENDER_ATTACHMENT.0) != 0 { usage |= vk::ImageUsageFlags::COLOR_ATTACHMENT; }
-                if (descriptor.usage.0 & lume_core::device::TextureUsage::DEPTH_STENCIL_ATTACHMENT.0) != 0 { usage |= vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT; }
-                if (descriptor.usage.0 & lume_core::device::TextureUsage::COPY_SRC.0) != 0 { usage |= vk::ImageUsageFlags::TRANSFER_SRC; }
-                if (descriptor.usage.0 & lume_core::device::TextureUsage::COPY_DST.0) != 0 { usage |= vk::ImageUsageFlags::TRANSFER_DST; }
-                usage
-            },
+            usage,
             sharing_mode: vk::SharingMode::EXCLUSIVE,
             initial_layout: vk::ImageLayout::UNDEFINED,
             ..Default::default()
         };
 
         let image = unsafe {
-            self.device.create_image(&create_info, None)
-                .map_err(|_| "Failed to create image")?
+            self.inner.device.create_image(&create_info, None)
+                .map_err(|e| LumeError::ResourceCreationFailed(format!("Failed to create texture: {}", e)))?
         };
 
-        // Memory allocation (Simplified, same logic as buffer)
-        let mem_requirements = unsafe { self.device.get_image_memory_requirements(image) };
-        let mem_properties = unsafe { self.instance.get_physical_device_memory_properties(self.physical_device) };
-        let memory_type_index = (0..mem_properties.memory_type_count)
-            .find(|&i| {
-                let suitable = (mem_requirements.memory_type_bits & (1 << i)) != 0;
-                let properties = mem_properties.memory_types[i as usize].property_flags;
-                let required = vk::MemoryPropertyFlags::DEVICE_LOCAL;
-                suitable && (properties & required) == required
-            })
-            .ok_or("Failed to find suitable memory type for image")?;
-
-        let alloc_info = vk::MemoryAllocateInfo {
-            allocation_size: mem_requirements.size,
-            memory_type_index,
-            ..Default::default()
-        };
-
-        let memory = unsafe {
-            self.device.allocate_memory(&alloc_info, None)
-                .map_err(|_| "Failed to allocate image memory")?
-        };
+        let requirements = unsafe { self.inner.device.get_image_memory_requirements(image) };
+        let allocator = self.inner.allocator.as_ref().ok_or_else(|| LumeError::BackendError("Allocator not initialized".to_string()))?;
+        let allocation = allocator.lock().unwrap().allocate(&AllocationCreateDesc {
+            name: "Generic Texture",
+            requirements,
+            location: MemoryLocation::GpuOnly,
+            linear: false,
+            allocation_scheme: AllocationScheme::GpuAllocatorManaged,
+        }).map_err(|e| LumeError::BackendError(format!("Failed to allocate texture memory: {}", e)))?;
 
         unsafe {
-            self.device.bind_image_memory(image, memory, 0)
-                .map_err(|_| "Failed to bind image memory")?;
+            self.inner.device.bind_image_memory(image, allocation.memory(), allocation.offset())
+                .map_err(|e| LumeError::BackendError(format!("Failed to bind texture memory: {}", e)))?;
         }
 
         Ok(crate::VulkanTexture {
             image,
-            memory,
-            device: self.device.clone(),
+            allocation,
+            format: create_info.format,
+            width: descriptor.width,
+            height: descriptor.height,
+            allocator: allocator.clone(),
+            device: self.inner.device.clone(),
         })
     }
 
-    fn create_texture_view(&self, texture: &Self::Texture, descriptor: lume_core::device::TextureViewDescriptor) -> Result<Self::TextureView, &'static str> {
-        let format = match descriptor.format {
-            Some(lume_core::device::TextureFormat::Bgra8UnormSrgb) => vk::Format::B8G8R8A8_SRGB,
-            Some(lume_core::device::TextureFormat::Rgba8UnormSrgb) => vk::Format::R8G8B8A8_SRGB,
-            Some(lume_core::device::TextureFormat::Rgba8Unorm) => vk::Format::R8G8B8A8_UNORM,
-            Some(lume_core::device::TextureFormat::Depth32Float) => vk::Format::D32_SFLOAT,
-            None => {
-                vk::Format::R8G8B8A8_UNORM 
-            }
-        };
-
-        let aspect_mask = if format == vk::Format::D32_SFLOAT {
-            vk::ImageAspectFlags::DEPTH
-        } else {
-            vk::ImageAspectFlags::COLOR
-        };
+    fn create_texture_view(&self, texture: &Self::Texture, _descriptor: lume_core::device::TextureViewDescriptor) -> LumeResult<Self::TextureView> {
+        let mut aspect_mask = vk::ImageAspectFlags::COLOR;
+        if texture.format == vk::Format::D32_SFLOAT {
+            aspect_mask = vk::ImageAspectFlags::DEPTH;
+        }
 
         let create_info = vk::ImageViewCreateInfo {
             image: texture.image,
             view_type: vk::ImageViewType::TYPE_2D,
-            format,
-            components: vk::ComponentMapping::default(),
+            format: texture.format,
             subresource_range: vk::ImageSubresourceRange {
                 aspect_mask,
                 base_mip_level: 0,
@@ -745,48 +776,34 @@ impl lume_core::Device for VulkanDevice {
         };
 
         let view = unsafe {
-            self.device.create_image_view(&create_info, None)
-                .map_err(|_| "Failed to create image view")?
+            self.inner.device.create_image_view(&create_info, None)
+                .map_err(|e| LumeError::ResourceCreationFailed(format!("Failed to create texture view: {}", e)))?
         };
 
         Ok(crate::VulkanTextureView {
             view,
-            device: self.device.clone(),
+            device: self.inner.device.clone(),
         })
     }
 
-    fn create_sampler(&self, descriptor: lume_core::device::SamplerDescriptor) -> Result<Self::Sampler, &'static str> {
+    fn create_sampler(&self, descriptor: lume_core::device::SamplerDescriptor) -> LumeResult<Self::Sampler> {
         let create_info = vk::SamplerCreateInfo {
-            mag_filter: match descriptor.mag_filter {
-                lume_core::device::FilterMode::Nearest => vk::Filter::NEAREST,
-                lume_core::device::FilterMode::Linear => vk::Filter::LINEAR,
-            },
-            min_filter: match descriptor.min_filter {
-                lume_core::device::FilterMode::Nearest => vk::Filter::NEAREST,
-                lume_core::device::FilterMode::Linear => vk::Filter::LINEAR,
-            },
-            address_mode_u: match descriptor.address_mode_u {
-                lume_core::device::AddressMode::Repeat => vk::SamplerAddressMode::REPEAT,
-                lume_core::device::AddressMode::MirrorRepeat => vk::SamplerAddressMode::MIRRORED_REPEAT,
-                lume_core::device::AddressMode::ClampToEdge => vk::SamplerAddressMode::CLAMP_TO_EDGE,
-            },
-            address_mode_v: match descriptor.address_mode_v {
-                lume_core::device::AddressMode::Repeat => vk::SamplerAddressMode::REPEAT,
-                lume_core::device::AddressMode::MirrorRepeat => vk::SamplerAddressMode::MIRRORED_REPEAT,
-                lume_core::device::AddressMode::ClampToEdge => vk::SamplerAddressMode::CLAMP_TO_EDGE,
-            },
+            mag_filter: map_filter(descriptor.mag_filter),
+            min_filter: map_filter(descriptor.min_filter),
+            address_mode_u: map_address_mode(descriptor.address_mode_u),
+            address_mode_v: map_address_mode(descriptor.address_mode_v),
             mipmap_mode: vk::SamplerMipmapMode::LINEAR,
             ..Default::default()
         };
 
         let sampler = unsafe {
-            self.device.create_sampler(&create_info, None)
-                .map_err(|_| "Failed to create sampler")?
+            self.inner.device.create_sampler(&create_info, None)
+                .map_err(|e| LumeError::ResourceCreationFailed(format!("Failed to create sampler: {}", e)))?
         };
 
         Ok(crate::VulkanSampler {
             sampler,
-            device: self.device.clone(),
+            device: self.inner.device.clone(),
         })
     }
 
@@ -794,53 +811,34 @@ impl lume_core::Device for VulkanDevice {
         &self,
         surface: &impl lume_core::instance::Surface,
         descriptor: lume_core::device::SwapchainDescriptor,
-    ) -> Result<Self::Swapchain, &'static str> {
-        // Cast opaque surface to VulkanSurface. 
-        // In a real generic system, we might need Any or downcast, 
-        // but here we know the concrete types match because the Instance created them.
-        // However, generic `impl Surface` prevents direct access unless we assume memory layout or use Any.
-        // For this phase, let's assume usage of correct concrete types and "unsafe" cast if needed,
-        // OR better, we can't easily downcast strictly without Any.
-        // But since `lume-vulkan` knows `lume-core` traits, and we are in `lume-vulkan`,
-        // we can try to unsafe pointer cast if we are confident, or change trait to exposing `as_any`.
-        // Let's rely on the fact that we passed `impl Surface` but in `main` we passed `&surface` which is `VulkanSurface`.
-        // Actually, the trait signature in `Device` is `surface: &impl crate::instance::Surface`.
-        // `VulkanDevice` needs `VulkanSurface` to get `vk::SurfaceKHR`.
-        
-        // HACK: For now, unsafe transmute or pointer access. 
-        // Real solution: Add `sys_handle()` to Surface trait returning Raw or a backend-specific unique ID/Handle.
-        // Let's unsafe cast for now to unblock.
+    ) -> LumeResult<Self::Swapchain> {
         let vk_surface = unsafe {
-             &*(surface as *const _ as *const crate::VulkanSurface)
+             &*(surface as *const dyn lume_core::instance::Surface as *const crate::VulkanSurface)
         };
         
-        // 1. Query Surface Capabilities
         let surface_loader = &vk_surface.surface_loader;
         let surface_khr = vk_surface.surface;
 
         let capabilities = unsafe {
-            surface_loader.get_physical_device_surface_capabilities(self.physical_device, surface_khr)
-                .map_err(|_| "Failed to query surface capabilities")?
+            surface_loader.get_physical_device_surface_capabilities(self.inner.physical_device, surface_khr)
+                .map_err(|e| LumeError::SurfaceCreationFailed(format!("Failed to query surface capabilities: {}", e)))?
         };
 
-        // 2. Select Format
         let formats = unsafe {
-            surface_loader.get_physical_device_surface_formats(self.physical_device, surface_khr)
-                .map_err(|_| "Failed to query surface formats")?
+            surface_loader.get_physical_device_surface_formats(self.inner.physical_device, surface_khr)
+                .map_err(|e| LumeError::SurfaceCreationFailed(format!("Failed to query surface formats: {}", e)))?
         };
         let format = formats.iter().find(|f| {
             f.format == vk::Format::B8G8R8A8_SRGB && f.color_space == vk::ColorSpaceKHR::SRGB_NONLINEAR
         }).unwrap_or(&formats[0]);
 
-        // 3. Select Present Mode
         let present_modes = unsafe {
-            surface_loader.get_physical_device_surface_present_modes(self.physical_device, surface_khr)
-                .map_err(|_| "Failed to query present modes")?
+            surface_loader.get_physical_device_surface_present_modes(self.inner.physical_device, surface_khr)
+                .map_err(|e| LumeError::SurfaceCreationFailed(format!("Failed to query present modes: {}", e)))?
         };
         let present_mode = present_modes.iter().cloned().find(|&m| m == vk::PresentModeKHR::MAILBOX)
-            .unwrap_or(vk::PresentModeKHR::FIFO); // FIFO is guaranteed
+            .unwrap_or(vk::PresentModeKHR::FIFO);
 
-        // 4. Extent
         let extent = if capabilities.current_extent.width != u32::MAX {
             capabilities.current_extent
         } else {
@@ -868,22 +866,21 @@ impl lume_core::Device for VulkanDevice {
             ..Default::default()
         };
 
-        let swapchain_loader = ash::khr::swapchain::Device::new(&self.instance, &self.device);
+        let swapchain_loader = ash::khr::swapchain::Device::new(&self.inner.instance, &self.inner.device);
         let swapchain = unsafe {
             swapchain_loader.create_swapchain(&create_info, None)
-                .map_err(|e| {
-                    error!("Failed to create swapchain: {:?}", e);
-                    "Failed to create swapchain"
-                })?
+                .map_err(|e| LumeError::ResourceCreationFailed(format!("Failed to create swapchain: {}", e)))?
         };
 
-        let images = unsafe { swapchain_loader.get_swapchain_images(swapchain).unwrap() };
-        let image_views: Vec<crate::VulkanTextureView> = images.iter().map(|&image| {
-            let create_info = vk::ImageViewCreateInfo {
+        let images = unsafe { swapchain_loader.get_swapchain_images(swapchain)
+            .map_err(|e| LumeError::BackendError(format!("Failed to get swapchain images: {}", e)))? };
+            
+        let mut image_views = Vec::new();
+        for &image in &images {
+            let iv_create_info = vk::ImageViewCreateInfo {
                 image,
                 view_type: vk::ImageViewType::TYPE_2D,
                 format: format.format,
-                components: vk::ComponentMapping::default(),
                 subresource_range: vk::ImageSubresourceRange {
                     aspect_mask: vk::ImageAspectFlags::COLOR,
                     base_mip_level: 0,
@@ -893,18 +890,21 @@ impl lume_core::Device for VulkanDevice {
                 },
                 ..Default::default()
             };
-            let view = unsafe { self.device.create_image_view(&create_info, None).unwrap() };
-            crate::VulkanTextureView {
+            let view = unsafe { self.inner.device.create_image_view(&iv_create_info, None)
+                .map_err(|e| LumeError::ResourceCreationFailed(format!("Failed to create swapchain image view: {}", e)))? };
+            image_views.push(crate::VulkanTextureView {
                 view,
-                device: self.device.clone(),
-            }
-        }).collect();
+                device: self.inner.device.clone(),
+            });
+        }
 
-        // Sync objects
         let semaphore_create_info = vk::SemaphoreCreateInfo::default();
-        let image_available_semaphores = (0..1).map(|_| { // just 1 for now
-            unsafe { self.device.create_semaphore(&semaphore_create_info, None).unwrap() }
-        }).collect();
+        let mut image_available_semaphores = Vec::new();
+        for _ in 0..1 {
+            let sema = unsafe { self.inner.device.create_semaphore(&semaphore_create_info, None)
+                .map_err(|e| LumeError::ResourceCreationFailed(format!("Failed to create swapchain semaphore: {}", e)))? };
+            image_available_semaphores.push(sema);
+        }
 
         info!("Swapchain created ({:?}) with {} images", extent, images.len());
 
@@ -917,8 +917,32 @@ impl lume_core::Device for VulkanDevice {
             format: format.format,
             image_available_semaphores,
             current_frame: 0,
-            device: self.device.clone(),
-            present_queue: self.present_queue,
+            device: self.inner.device.clone(),
+            present_queue: self.inner.present_queue,
         })
+    }
+}
+
+fn map_texture_format(format: lume_core::device::TextureFormat) -> vk::Format {
+    match format {
+        lume_core::device::TextureFormat::Bgra8UnormSrgb => vk::Format::B8G8R8A8_SRGB,
+        lume_core::device::TextureFormat::Rgba8UnormSrgb => vk::Format::R8G8B8A8_SRGB,
+        lume_core::device::TextureFormat::Rgba8Unorm => vk::Format::R8G8B8A8_UNORM,
+        lume_core::device::TextureFormat::Depth32Float => vk::Format::D32_SFLOAT,
+    }
+}
+
+fn map_filter(filter: lume_core::device::FilterMode) -> vk::Filter {
+    match filter {
+        lume_core::device::FilterMode::Nearest => vk::Filter::NEAREST,
+        lume_core::device::FilterMode::Linear => vk::Filter::LINEAR,
+    }
+}
+
+fn map_address_mode(mode: lume_core::device::AddressMode) -> vk::SamplerAddressMode {
+    match mode {
+        lume_core::device::AddressMode::Repeat => vk::SamplerAddressMode::REPEAT,
+        lume_core::device::AddressMode::MirrorRepeat => vk::SamplerAddressMode::MIRRORED_REPEAT,
+        lume_core::device::AddressMode::ClampToEdge => vk::SamplerAddressMode::CLAMP_TO_EDGE,
     }
 }

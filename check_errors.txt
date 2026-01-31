@@ -1,0 +1,99 @@
+    Checking lume-vulkan v0.1.0 (G:\Document-5\LumeVisual\LumeVisual\lume-vulkan)
+warning: unused import: `Entry`
+ --> lume-vulkan\src\instance.rs:1:15
+  |
+1 | use ash::{vk, Entry};
+  |               ^^^^^
+  |
+  = note: `#[warn(unused_imports)]` on by default
+
+warning: unused import: `CString`
+ --> lume-vulkan\src\instance.rs:4:22
+  |
+4 | use std::ffi::{CStr, CString};
+  |                      ^^^^^^^
+
+warning: unused imports: `error` and `warn`
+ --> lume-vulkan\src\instance.rs:5:17
+  |
+5 | use log::{info, error, warn};
+  |                 ^^^^^  ^^^^
+
+warning: unused import: `error`
+ --> lume-vulkan\src\device.rs:2:17
+  |
+2 | use log::{info, error};
+  |                 ^^^^^
+
+warning: unused import: `error`
+ --> lume-vulkan\src\swapchain.rs:2:17
+  |
+2 | use log::{info, error};
+  |                 ^^^^^
+
+error[E0277]: `(Vec<Pipeline>, ash::vk::Result)` doesn't implement `std::fmt::Display`
+   --> lume-vulkan\src\device.rs:337:113
+    |
+337 |                 .map_err(|e| LumeError::PipelineCreationFailed(format!("Failed to create compute pipeline: {}", e)))?
+    |                                                                                                            --   ^ `(Vec<Pipeline>, ash::vk::Result)` cannot be formatted with the default formatter
+    |                                                                                                            |
+    |                                                                                                            required by this formatting parameter
+    |
+    = help: the trait `std::fmt::Display` is not implemented for `(Vec<Pipeline>, ash::vk::Result)`
+    = note: in format strings you may be able to use `{:?}` (or {:#?} for pretty-print) instead
+    = note: this error originates in the macro `$crate::__export::format_args` which comes from the expansion of the macro `format` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: `(Vec<Pipeline>, ash::vk::Result)` doesn't implement `std::fmt::Display`
+   --> lume-vulkan\src\device.rs:489:114
+    |
+489 |                 .map_err(|e| LumeError::PipelineCreationFailed(format!("Failed to create graphics pipeline: {}", e)))?
+    |                                                                                                             --   ^ `(Vec<Pipeline>, ash::vk::Result)` cannot be formatted with the default formatter
+    |                                                                                                             |
+    |                                                                                                             required by this formatting parameter
+    |
+    = help: the trait `std::fmt::Display` is not implemented for `(Vec<Pipeline>, ash::vk::Result)`
+    = note: in format strings you may be able to use `{:?}` (or {:#?} for pretty-print) instead
+    = note: this error originates in the macro `$crate::__export::format_args` which comes from the expansion of the macro `format` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0599]: no variant or associated item named `GpuNextFree` found for enum `gpu_allocator::vulkan::AllocationScheme` in the current scope
+   --> lume-vulkan\src\device.rs:559:50
+    |
+559 |             allocation_scheme: AllocationScheme::GpuNextFree,
+    |                                                  ^^^^^^^^^^^ variant or associated item not found in `gpu_allocator::vulkan::AllocationScheme`
+
+error[E0599]: no variant or associated item named `GpuNextFree` found for enum `gpu_allocator::vulkan::AllocationScheme` in the current scope
+   --> lume-vulkan\src\device.rs:739:50
+    |
+739 |             allocation_scheme: AllocationScheme::GpuNextFree,
+    |                                                  ^^^^^^^^^^^ variant or associated item not found in `gpu_allocator::vulkan::AllocationScheme`
+
+warning: unused import: `HasWindowHandle`
+ --> lume-vulkan\src\instance.rs:3:43
+  |
+3 | use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
+  |                                           ^^^^^^^^^^^^^^^
+
+warning: unused import: `HasDisplayHandle`
+ --> lume-vulkan\src\instance.rs:3:25
+  |
+3 | use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
+  |                         ^^^^^^^^^^^^^^^^
+
+warning: unused variable: `device_name`
+   --> lume-vulkan\src\instance.rs:157:21
+    |
+157 |                 let device_name = unsafe { std::ffi::CStr::from_ptr(props.device_name.as_ptr()) }.to_string_lossy();
+    |                     ^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_device_name`
+    |
+    = note: `#[warn(unused_variables)]` on by default
+
+warning: unused variable: `descriptor`
+   --> lume-vulkan\src\device.rs:758:60
+    |
+758 | ...texture: &Self::Texture, descriptor: lume_core::device::TextureViewDescriptor) -> LumeResult<Self::TextureView> {
+    |                             ^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_descriptor`
+
+Some errors have detailed explanations: E0277, E0599.
+For more information about an error, try `rustc --explain E0277`.
+warning: `lume-vulkan` (lib) generated 9 warnings
+error: could not compile `lume-vulkan` (lib) due to 4 previous errors; 9 warnings emitted

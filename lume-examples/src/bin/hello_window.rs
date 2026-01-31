@@ -36,7 +36,7 @@ impl ApplicationHandler for App {
             let surface = instance.create_surface(&window, &window).expect("Failed to create surface");
             
             // Request device
-            let device = instance.request_device(&surface).expect("Failed to request device");
+            let device = instance.request_device(Some(&surface)).expect("Failed to request device");
 
             // Create Swapchain
             let size = window.inner_size();

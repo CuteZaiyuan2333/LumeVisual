@@ -6,5 +6,7 @@ edition = "2024"
 [dependencies]
 lume-core = { path = "../lume-core" }
 ash = { workspace = true }
+ash-window = "0.13"
 log = { workspace = true }
 raw-window-handle = { workspace = true }
+gpu-allocator = "0.27"

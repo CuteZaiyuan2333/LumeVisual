@@ -12,9 +12,14 @@ fn main() {
     let instance = VulkanInstance::new(instance_desc).expect("Failed to create Lume Instance");
     let device = instance.request_device(None).expect("Failed to request device");
 
+    run_compute(&device);
+}
+
+/// Generic compute logic that works with ANY implementation of the Device trait.
+fn run_compute<D: Device>(device: &D) {
     // 1. Create Data
     let data_size = 64;
-    let mut initial_data = vec![1.0f32; data_size];
+    let initial_data = vec![1.0f32; data_size];
     let data_bytes: &[u8] = unsafe {
         std::slice::from_raw_parts(initial_data.as_ptr() as *const u8, initial_data.len() * 4)
     };
@@ -92,7 +97,7 @@ fn main() {
     }
 
     if result_data[0] == 2.0 {
-        println!("SUCCESS: Compute working correctly!");
+        println!("SUCCESS: Compute working correctly on a generic Device!");
     } else {
         println!("FAILURE: Expected 2.0, got {}", result_data[0]);
     }
