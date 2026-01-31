@@ -8,10 +8,10 @@ use gpu_allocator::AllocationSizes;
 use std::sync::{Arc, Mutex};
 
 pub struct VulkanInstance {
-    _entry: ash::Entry,
-    instance: ash::Instance,
-    _debug_utils_loader: Option<ash::ext::debug_utils::Instance>,
     _debug_messenger: Option<vk::DebugUtilsMessengerEXT>,
+    _debug_utils_loader: Option<ash::ext::debug_utils::Instance>,
+    instance: ash::Instance,
+    _entry: ash::Entry,
 }
 
 unsafe extern "system" fn vulkan_debug_callback(

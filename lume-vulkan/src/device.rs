@@ -6,14 +6,14 @@ use gpu_allocator::MemoryLocation;
 use lume_core::{LumeError, LumeResult};
 
 pub struct VulkanDeviceInner {
-    pub instance: ash::Instance,
-    pub device: ash::Device,
-    pub physical_device: vk::PhysicalDevice,
-    pub graphics_queue: vk::Queue,
-    pub present_queue: vk::Queue, 
-    pub graphics_queue_index: u32,
-    pub descriptor_pool: vk::DescriptorPool,
     pub allocator: Option<Arc<Mutex<Allocator>>>,
+    pub descriptor_pool: vk::DescriptorPool,
+    pub graphics_queue_index: u32,
+    pub present_queue: vk::Queue, 
+    pub graphics_queue: vk::Queue,
+    pub physical_device: vk::PhysicalDevice,
+    pub device: ash::Device,
+    pub instance: ash::Instance,
 }
 
 #[derive(Clone)]
@@ -542,8 +542,10 @@ impl lume_core::Device for VulkanDevice {
             self.inner.device.create_buffer(&create_info, None)
                 .map_err(|e| LumeError::ResourceCreationFailed(format!("Failed to create buffer: {}", e)))?
         };
+        log::info!("Vulkan buffer handle created: {:?}", buffer);
 
         let requirements = unsafe { self.inner.device.get_buffer_memory_requirements(buffer) };
+        log::info!("Buffer requirements: {:?}", requirements);
         let location = if descriptor.mapped_at_creation {
             MemoryLocation::CpuToGpu
         } else {
@@ -551,13 +553,15 @@ impl lume_core::Device for VulkanDevice {
         };
 
         let allocator = self.inner.allocator.as_ref().ok_or_else(|| LumeError::BackendError("Allocator not initialized".to_string()))?;
+        log::info!("Allocating memory from GPU allocator...");
         let allocation = allocator.lock().unwrap().allocate(&AllocationCreateDesc {
             name: "Generic Buffer",
             requirements,
             location,
             linear: true,
-            allocation_scheme: AllocationScheme::GpuAllocatorManaged,
+            allocation_scheme: AllocationScheme::DedicatedBuffer(buffer),
         }).map_err(|e| LumeError::BackendError(format!("Failed to allocate buffer memory: {}", e)))?;
+        log::info!("Memory allocated successfully. Binding...");
 
         unsafe {
             self.inner.device.bind_buffer_memory(buffer, allocation.memory(), allocation.offset())
@@ -581,7 +585,7 @@ impl lume_core::Device for VulkanDevice {
             let vk_type = match entry.ty {
                 lume_core::device::BindingType::UniformBuffer => vk::DescriptorType::UNIFORM_BUFFER,
                 lume_core::device::BindingType::StorageBuffer => vk::DescriptorType::STORAGE_BUFFER,
-                lume_core::device::BindingType::SampledTexture => vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
+                lume_core::device::BindingType::SampledTexture => vk::DescriptorType::SAMPLED_IMAGE,
                 lume_core::device::BindingType::Sampler => vk::DescriptorType::SAMPLER,
             };
 
@@ -632,22 +636,46 @@ impl lume_core::Device for VulkanDevice {
         };
 
         let set = sets[0];
-        let mut writes = Vec::new();
         
-        // We need to keep these alive until we call update_descriptor_sets
-        let mut buffer_infos = Vec::new();
-        let mut image_infos = Vec::new();
-
-        for entry in descriptor.entries {
-            let ty = descriptor.layout.entries.get(&entry.binding).ok_or_else(|| LumeError::Generic("Unknown binding in bind group"))?;
-            
+        // 1. Pre-collect all resources to ensure stable addresses
+        let mut final_buffer_infos = Vec::new();
+        let mut final_image_infos = Vec::new();
+        
+        // Collect into stable vectors first
+        for entry in &descriptor.entries {
             match entry.resource {
                 lume_core::device::BindingResource::Buffer(buf) => {
-                    buffer_infos.push(vk::DescriptorBufferInfo {
+                    final_buffer_infos.push(vk::DescriptorBufferInfo {
                         buffer: buf.buffer,
                         offset: 0,
                         range: buf.size,
                     });
+                }
+                lume_core::device::BindingResource::TextureView(view) => {
+                    final_image_infos.push(vk::DescriptorImageInfo {
+                        image_view: view.view,
+                        image_layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+                        ..Default::default()
+                    });
+                }
+                lume_core::device::BindingResource::Sampler(sampler) => {
+                    final_image_infos.push(vk::DescriptorImageInfo {
+                        sampler: sampler.sampler,
+                        ..Default::default()
+                    });
+                }
+            }
+        }
+        
+        let mut buffer_pointer = 0;
+        let mut image_pointer = 0;
+        let mut writes = Vec::new();
+        
+        // 2. Re-iterate to build writes using stable references from final_buffer_infos/final_image_infos
+        for entry in &descriptor.entries {
+            let ty = descriptor.layout.entries.get(&entry.binding).ok_or_else(|| LumeError::Generic("Unknown binding in bind group"))?;
+            match entry.resource {
+                lume_core::device::BindingResource::Buffer(_) => {
                     let vk_ty = match ty {
                         lume_core::device::BindingType::UniformBuffer => vk::DescriptorType::UNIFORM_BUFFER,
                         lume_core::device::BindingType::StorageBuffer => vk::DescriptorType::STORAGE_BUFFER,
@@ -658,38 +686,32 @@ impl lume_core::Device for VulkanDevice {
                         dst_binding: entry.binding,
                         descriptor_count: 1,
                         descriptor_type: vk_ty,
-                        p_buffer_info: &buffer_infos[buffer_infos.len() - 1],
+                        p_buffer_info: &final_buffer_infos[buffer_pointer],
                         ..Default::default()
                     });
+                    buffer_pointer += 1;
                 }
-                lume_core::device::BindingResource::TextureView(view) => {
-                    image_infos.push(vk::DescriptorImageInfo {
-                        image_view: view.view,
-                        image_layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
-                        ..Default::default()
-                    });
+                lume_core::device::BindingResource::TextureView(_) => {
                     writes.push(vk::WriteDescriptorSet {
                         dst_set: set,
                         dst_binding: entry.binding,
                         descriptor_count: 1,
-                        descriptor_type: vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
-                        p_image_info: &image_infos[image_infos.len() - 1],
+                        descriptor_type: vk::DescriptorType::SAMPLED_IMAGE,
+                        p_image_info: &final_image_infos[image_pointer],
                         ..Default::default()
                     });
+                    image_pointer += 1;
                 }
-                lume_core::device::BindingResource::Sampler(sampler) => {
-                     image_infos.push(vk::DescriptorImageInfo {
-                        sampler: sampler.sampler,
-                        ..Default::default()
-                    });
+                lume_core::device::BindingResource::Sampler(_) => {
                     writes.push(vk::WriteDescriptorSet {
                         dst_set: set,
                         dst_binding: entry.binding,
                         descriptor_count: 1,
                         descriptor_type: vk::DescriptorType::SAMPLER,
-                        p_image_info: &image_infos[image_infos.len() - 1],
+                        p_image_info: &final_image_infos[image_pointer],
                         ..Default::default()
                     });
+                    image_pointer += 1;
                 }
             }
         }

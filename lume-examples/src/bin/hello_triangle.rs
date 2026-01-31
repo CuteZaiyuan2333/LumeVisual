@@ -10,35 +10,35 @@ use glam::{Mat4, Vec3};
 use lume_core::{Instance, InstanceDescriptor, Backend, Device, shader::{compile_shader, ShaderSource}, device::{SwapchainDescriptor, RenderPassDescriptor, TextureFormat, PipelineLayoutDescriptor, GraphicsPipelineDescriptor, PrimitiveState, PrimitiveTopology, CommandPool, CommandBuffer, FramebufferDescriptor, Swapchain, Buffer, BindGroupLayoutDescriptor, BindGroupLayoutEntry, ShaderStage, BindingType, BindGroupDescriptor, BindGroupEntry, BindingResource, TextureDescriptor, TextureUsage, SamplerDescriptor, FilterMode, AddressMode, TextureViewDescriptor, ImageLayout, DepthStencilState, CompareFunction}};
 use lume_vulkan::VulkanInstance;
 
-struct App<I: Instance> {
+struct App {
     window: Option<Arc<Window>>,
-    instance: Option<I>,
-    surface: Option<I::Surface>,
-    device: Option<I::Device>,
-    swapchain: Option<<I::Device as Device>::Swapchain>,
-    render_pass: Option<<I::Device as Device>::RenderPass>,
-    pipeline_layout: Option<<I::Device as Device>::PipelineLayout>,
-    pipeline: Option<<I::Device as Device>::GraphicsPipeline>,
-    shaders: Vec<<I::Device as Device>::ShaderModule>,
-    vertex_buffer: Option<<I::Device as Device>::Buffer>,
-    uniform_buffer: Option<<I::Device as Device>::Buffer>,
-    texture: Option<<I::Device as Device>::Texture>,
-    texture_view: Option<<I::Device as Device>::TextureView>,
-    sampler: Option<<I::Device as Device>::Sampler>,
-    depth_texture: Option<<I::Device as Device>::Texture>,
-    depth_view: Option<<I::Device as Device>::TextureView>,
-    bind_group_layout: Option<<I::Device as Device>::BindGroupLayout>,
-    bind_group: Option<<I::Device as Device>::BindGroup>,
+    instance: Option<VulkanInstance>,
+    surface: Option<lume_vulkan::VulkanSurface>,
+    device: Option<lume_vulkan::VulkanDevice>,
+    swapchain: Option<lume_vulkan::VulkanSwapchain>,
+    render_pass: Option<lume_vulkan::VulkanRenderPass>,
+    pipeline_layout: Option<lume_vulkan::VulkanPipelineLayout>,
+    pipeline: Option<lume_vulkan::VulkanGraphicsPipeline>,
+    shaders: Vec<lume_vulkan::VulkanShaderModule>,
+    vertex_buffer: Option<lume_vulkan::VulkanBuffer>,
+    uniform_buffer: Option<lume_vulkan::VulkanBuffer>,
+    texture: Option<lume_vulkan::VulkanTexture>,
+    texture_view: Option<lume_vulkan::VulkanTextureView>,
+    sampler: Option<lume_vulkan::VulkanSampler>,
+    depth_texture: Option<lume_vulkan::VulkanTexture>,
+    depth_view: Option<lume_vulkan::VulkanTextureView>,
+    bind_group_layout: Option<lume_vulkan::VulkanBindGroupLayout>,
+    bind_group: Option<lume_vulkan::VulkanBindGroup>,
     start_time: SystemTime,
     
-    command_pool: Option<<I::Device as Device>::CommandPool>,
-    command_buffers: Vec<<I::Device as Device>::CommandBuffer>,
-    framebuffers: Vec<<I::Device as Device>::Framebuffer>,
-    image_available_semaphore: Option<<I::Device as Device>::Semaphore>,
-    render_finished_semaphore: Option<<I::Device as Device>::Semaphore>,
+    command_pool: Option<lume_vulkan::VulkanCommandPool>,
+    command_buffers: Vec<lume_vulkan::VulkanCommandBuffer>,
+    framebuffers: Vec<lume_vulkan::VulkanFramebuffer>,
+    image_available_semaphore: Option<lume_vulkan::VulkanSemaphore>,
+    render_finished_semaphore: Option<lume_vulkan::VulkanSemaphore>,
 }
 
-impl<I: Instance> ApplicationHandler for App<I> {
+impl ApplicationHandler for App {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if self.window.is_none() {
             let window_attributes = Window::default_attributes()
@@ -53,17 +53,18 @@ impl<I: Instance> ApplicationHandler for App<I> {
                 backend: Backend::Vulkan,
             };
             
-            let instance = I::new(instance_desc).expect("Failed to create Lume Instance");
+            let instance = VulkanInstance::new(instance_desc).expect("Failed to create Lume Instance");
             let surface = instance.create_surface(&window, &window).expect("Failed to create surface");
             let device = instance.request_device(Some(&surface)).expect("Failed to request device");
 
-            // Create Swapchain
+            log::info!("Creating Swapchain...");
             let size = window.inner_size();
             let swapchain = device.create_swapchain(&surface, SwapchainDescriptor {
                 width: size.width,
                 height: size.height,
             }).expect("Failed to create swapchain");
 
+            log::info!("Loading Texture...");
             // Load Texture Data
             let img = image::open("lume-examples/assets/texture.jpg").expect("Failed to load texture");
             let (width, height) = img.dimensions();
@@ -139,8 +140,11 @@ impl<I: Instance> ApplicationHandler for App<I> {
                 defines: naga::FastHashMap::default(),
             }).expect("Failed to compile fragment shader");
 
+            log::info!("Compiling Shaders...");
             let vert_module = device.create_shader_module(&vert_spv).expect("Failed to create vert shader");
             let frag_module = device.create_shader_module(&frag_spv).expect("Failed to create frag shader");
+
+            log::info!("Creating Render Pass...");
 
             // Create Render Pass
             let render_pass = device.create_render_pass(RenderPassDescriptor {
@@ -169,10 +173,12 @@ impl<I: Instance> ApplicationHandler for App<I> {
                 ],
             }).expect("Failed to create bind group layout");
 
-            // Create Pipeline Layout
+            log::info!("Creating Pipeline Layout...");
             let layout = device.create_pipeline_layout(PipelineLayoutDescriptor {
                 bind_group_layouts: &[&bind_group_layout],
             }).expect("Failed to create layout");
+
+            log::info!("Creating Graphics Pipeline...");
 
             // Create Graphics Pipeline
             let pipeline = device.create_graphics_pipeline(GraphicsPipelineDescriptor {
@@ -205,7 +211,7 @@ impl<I: Instance> ApplicationHandler for App<I> {
                 }),
             }).expect("Failed to create pipeline");
 
-            // Create Cube Vertex Buffer
+            log::info!("Pipeline created. Creating Vertex Buffer...");
             let vertices: [f32; 180] = [
                 // Front face
                 -0.5, -0.5,  0.5, 0.0, 0.0,
@@ -257,11 +263,12 @@ impl<I: Instance> ApplicationHandler for App<I> {
                 mapped_at_creation: true,
             }).expect("Failed to create vertex buffer");
 
+            log::info!("Vertex Buffer created. Writing data...");
             vertex_buffer.write_data(0, unsafe {
                 std::slice::from_raw_parts(vertices.as_ptr() as *const u8, vertices.len() * 4)
             }).expect("Failed to write vertex data");
 
-            // Create Uniform Buffer
+            log::info!("Vertex data written. Creating Uniform Buffer...");
             let uniform_buffer = device.create_buffer(lume_core::device::BufferDescriptor {
                 size: 64, // 4x4 matrix
                 usage: lume_core::device::BufferUsage::UNIFORM,
@@ -409,7 +416,7 @@ fn main() {
     log::info!("Starting Hello Triangle Example (Backend Agnostic)");
 
     let event_loop = EventLoop::new().unwrap();
-    let mut app = App::<VulkanInstance> { 
+    let mut app = App { 
         window: None, 
         instance: None, 
         surface: None, 
