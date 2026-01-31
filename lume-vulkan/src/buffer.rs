@@ -8,13 +8,13 @@ pub struct VulkanBuffer {
     pub allocation: Allocation,
     pub size: u64,
     pub allocator: Arc<Mutex<Allocator>>,
-    pub device: ash::Device,
+    pub device: crate::VulkanDevice,
 }
 
 impl Drop for VulkanBuffer {
     fn drop(&mut self) {
         unsafe {
-            self.device.destroy_buffer(self.buffer, None);
+            self.device.inner.device.destroy_buffer(self.buffer, None);
         }
         let allocation = std::mem::replace(&mut self.allocation, Allocation::default());
         self.allocator.lock().unwrap().free(allocation).expect("Failed to free buffer memory");

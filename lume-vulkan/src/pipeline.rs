@@ -155,6 +155,12 @@ impl lume_core::device::CommandBuffer for VulkanCommandBuffer {
                     float32: clear_color,
                 },
             },
+            vk::ClearValue {
+                depth_stencil: vk::ClearDepthStencilValue {
+                    depth: 1.0,
+                    stencil: 0,
+                },
+            },
         ];
 
         let render_pass_begin_info = vk::RenderPassBeginInfo {
@@ -390,6 +396,7 @@ fn map_layout(layout: lume_core::device::ImageLayout) -> vk::ImageLayout {
     }
 }
 
+#[derive(Clone)]
 pub struct VulkanSemaphore {
     pub semaphore: vk::Semaphore,
     pub device: ash::Device,

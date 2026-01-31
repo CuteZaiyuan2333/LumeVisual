@@ -36,15 +36,18 @@ impl Drop for VulkanSwapchain {
 impl lume_core::device::Swapchain for VulkanSwapchain {
     type TextureView = VulkanTextureView;
 
-    fn acquire_next_image(&mut self) -> lume_core::LumeResult<u32> {
-        let semaphore = self.image_available_semaphores[self.current_frame];
+    fn acquire_next_image(&mut self, signal_semaphore: &impl lume_core::device::Semaphore) -> lume_core::LumeResult<u32> {
+        let vk_semaphore = unsafe {
+            let s = &*(signal_semaphore as *const dyn lume_core::device::Semaphore as *const crate::VulkanSemaphore);
+            s.semaphore
+        };
 
         unsafe {
             let (index, _is_suboptimal) = self.swapchain_loader
                 .acquire_next_image(
                     self.swapchain,
                     u64::MAX,
-                    semaphore,
+                    vk_semaphore,
                     vk::Fence::null(),
                 )
                 .map_err(|e| lume_core::LumeError::BackendError(format!("Failed to acquire next image: {}", e)))?;
@@ -52,11 +55,18 @@ impl lume_core::device::Swapchain for VulkanSwapchain {
         }
     }
 
-    fn present(&mut self, image_index: u32) -> lume_core::LumeResult<()> {
+    fn present(&mut self, image_index: u32, wait_semaphores: &[&impl lume_core::device::Semaphore]) -> lume_core::LumeResult<()> {
         let swapchains = [self.swapchain];
         let image_indices = [image_index];
         
+        let vk_wait_semaphores: Vec<vk::Semaphore> = wait_semaphores.iter().map(|&s| {
+            let vs = unsafe { &*(s as *const dyn lume_core::device::Semaphore as *const crate::VulkanSemaphore) };
+            vs.semaphore
+        }).collect();
+
         let present_info = vk::PresentInfoKHR {
+            wait_semaphore_count: vk_wait_semaphores.len() as u32,
+            p_wait_semaphores: vk_wait_semaphores.as_ptr(),
             swapchain_count: 1,
             p_swapchains: swapchains.as_ptr(),
             p_image_indices: image_indices.as_ptr(),

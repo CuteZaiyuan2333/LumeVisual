@@ -14,6 +14,7 @@ LumeVisual is a high-level, pure Rust rendering library designed for the next ge
 - `lume-metal`: Metal backend implementation.
 - `lume-adaptrix`: Virtual Geometry and streaming system.
 
-## Status
-Planning & Skeleton Phase.
-See `LumeVisual_Architecture.md` for design details.
+### Current Status
+- **lume-vulkan**: Fully functional core for resource management (Buffers, Textures), modern BindGroup-based descriptor management, and synchronized frame loop.
+- **Examples**: `hello_triangle` now renders a fully textured and transformed 3D cube with depth testing.
+- **Stability**: Fixed critical driver-level memory access issues and ensured safe GPU shutdown.

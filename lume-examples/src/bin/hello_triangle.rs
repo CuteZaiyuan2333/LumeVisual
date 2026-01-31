@@ -361,6 +361,10 @@ impl ApplicationHandler for App {
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: winit::event::WindowEvent) {
         match event {
             winit::event::WindowEvent::CloseRequested => {
+                if let Some(device) = &self.device {
+                    log::info!("Waiting for GPU idle before shutdown...");
+                    let _ = device.wait_idle();
+                }
                 event_loop.exit();
             }
             winit::event::WindowEvent::RedrawRequested => {
@@ -370,8 +374,11 @@ impl ApplicationHandler for App {
                     &self.image_available_semaphore,
                     &self.render_finished_semaphore,
                 ) {
-                    let image_index = swapchain.acquire_next_image().expect("Failed to acquire next image");
+                    // 1. Acquire next image
+                    let image_index = swapchain.acquire_next_image(image_available).expect("Failed to acquire next image");
 
+                    // 2. Update Uniforms (MVP)
+                    // ... (保持原有逻辑)
                     let now = SystemTime::now();
                     let duration = now.duration_since(self.start_time).unwrap();
                     let time = duration.as_secs_f32();
@@ -392,6 +399,7 @@ impl ApplicationHandler for App {
                         std::slice::from_raw_parts(mvp_bytes.as_ptr() as *const u8, 64)
                     }).expect("Failed to update uniform buffer");
 
+                    // 3. Submit command buffer
                     let cmd = &self.command_buffers[image_index as usize];
                     device.submit(
                         &[cmd],
@@ -399,7 +407,12 @@ impl ApplicationHandler for App {
                         &[render_finished],
                     ).expect("Failed to submit commands");
 
-                    swapchain.present(image_index).expect("Failed to present image");
+                    // 4. Present image
+                    swapchain.present(image_index, &[render_finished]).expect("Failed to present image");
+
+                    // 5. Wait for GPU to finish this frame before we start the next one
+                    // This prevents the uniform buffer from being overwritten while the GPU is still reading it
+                    device.wait_idle().expect("Failed to wait idle");
                 }
             }
             _ => (),

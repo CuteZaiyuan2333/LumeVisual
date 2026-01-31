@@ -573,7 +573,7 @@ impl lume_core::Device for VulkanDevice {
             allocation,
             size: descriptor.size,
             allocator: allocator.clone(),
-            device: self.inner.device.clone(),
+            device: self.clone(),
         })
     }
 
@@ -732,9 +732,10 @@ impl lume_core::Device for VulkanDevice {
         if descriptor.usage.0 & lume_core::device::TextureUsage::COPY_SRC.0 != 0 { usage |= vk::ImageUsageFlags::TRANSFER_SRC; }
         if descriptor.usage.0 & lume_core::device::TextureUsage::COPY_DST.0 != 0 { usage |= vk::ImageUsageFlags::TRANSFER_DST; }
 
+        let format = map_texture_format(descriptor.format);
         let create_info = vk::ImageCreateInfo {
             image_type: vk::ImageType::TYPE_2D,
-            format: map_texture_format(descriptor.format),
+            format,
             extent: vk::Extent3D { width: descriptor.width, height: descriptor.height, depth: 1 },
             mip_levels: 1,
             array_layers: 1,
@@ -748,13 +749,14 @@ impl lume_core::Device for VulkanDevice {
 
         let image = unsafe {
             self.inner.device.create_image(&create_info, None)
-                .map_err(|e| LumeError::ResourceCreationFailed(format!("Failed to create texture: {}", e)))?
+                .map_err(|e| LumeError::ResourceCreationFailed(format!("Failed to create texture ({}x{}): {}", descriptor.width, descriptor.height, e)))?
         };
 
         let requirements = unsafe { self.inner.device.get_image_memory_requirements(image) };
         let allocator = self.inner.allocator.as_ref().ok_or_else(|| LumeError::BackendError("Allocator not initialized".to_string()))?;
+        
         let allocation = allocator.lock().unwrap().allocate(&AllocationCreateDesc {
-            name: "Generic Texture",
+            name: "Lume_Texture",
             requirements,
             location: MemoryLocation::GpuOnly,
             linear: false,
@@ -769,7 +771,7 @@ impl lume_core::Device for VulkanDevice {
         Ok(crate::VulkanTexture {
             image,
             allocation,
-            format: create_info.format,
+            format,
             width: descriptor.width,
             height: descriptor.height,
             allocator: allocator.clone(),
@@ -777,16 +779,20 @@ impl lume_core::Device for VulkanDevice {
         })
     }
 
-    fn create_texture_view(&self, texture: &Self::Texture, _descriptor: lume_core::device::TextureViewDescriptor) -> LumeResult<Self::TextureView> {
-        let mut aspect_mask = vk::ImageAspectFlags::COLOR;
-        if texture.format == vk::Format::D32_SFLOAT {
-            aspect_mask = vk::ImageAspectFlags::DEPTH;
-        }
+    fn create_texture_view(&self, texture: &Self::Texture, descriptor: lume_core::device::TextureViewDescriptor) -> LumeResult<Self::TextureView> {
+        let view_format = descriptor.format.map(map_texture_format).unwrap_or(texture.format);
+        
+        // Automatically determine aspect mask based on format
+        let aspect_mask = if is_depth_format(view_format) {
+            vk::ImageAspectFlags::DEPTH
+        } else {
+            vk::ImageAspectFlags::COLOR
+        };
 
         let create_info = vk::ImageViewCreateInfo {
             image: texture.image,
             view_type: vk::ImageViewType::TYPE_2D,
-            format: texture.format,
+            format: view_format,
             subresource_range: vk::ImageSubresourceRange {
                 aspect_mask,
                 base_mip_level: 0,
@@ -967,4 +973,17 @@ fn map_address_mode(mode: lume_core::device::AddressMode) -> vk::SamplerAddressM
         lume_core::device::AddressMode::MirrorRepeat => vk::SamplerAddressMode::MIRRORED_REPEAT,
         lume_core::device::AddressMode::ClampToEdge => vk::SamplerAddressMode::CLAMP_TO_EDGE,
     }
+}
+
+fn is_depth_format(format: vk::Format) -> bool {
+    matches!(
+        format,
+        vk::Format::D16_UNORM
+            | vk::Format::X8_D24_UNORM_PACK32
+            | vk::Format::D32_SFLOAT
+            | vk::Format::S8_UINT
+            | vk::Format::D16_UNORM_S8_UINT
+            | vk::Format::D24_UNORM_S8_UINT
+            | vk::Format::D32_SFLOAT_S8_UINT
+    )
 }

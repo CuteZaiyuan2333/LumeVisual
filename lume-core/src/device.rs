@@ -247,8 +247,8 @@ pub struct VertexLayout {
 
 pub trait Swapchain {
     type TextureView: TextureView;
-    fn present(&mut self, image_index: u32) -> crate::LumeResult<()>;
-    fn acquire_next_image(&mut self) -> crate::LumeResult<u32>;
+    fn present(&mut self, image_index: u32, wait_semaphores: &[&impl Semaphore]) -> crate::LumeResult<()>;
+    fn acquire_next_image(&mut self, signal_semaphore: &impl Semaphore) -> crate::LumeResult<u32>;
     fn get_view(&self, index: u32) -> &Self::TextureView;
 }
 

@@ -15,15 +15,15 @@ The system is divided into several crates:
 - `lume-metal`: Metal backend implementation (macOS/iOS).
 - `lume-adaptrix`: The virtual geometry and streaming engine.
 
-## Current Progress: Phase 2 (Core Loop)
-We are currently implementing the foundational graphics objects:
-1.  **Instance & Surface**: Initialized and connected to the OS window (Winit 0.30).
-2.  **Device Selection**: Picking the best GPU (Intel Arc B580 detected).
-3.  **Swapchain**: [Completed] Managing images for screen presentation.
-4.  **Graphics Pipeline**: [Completed] Shaders and pipeline state initialized.
-5.  **Commands & Rendering**: [Completed] Command buffers and frame loop functional.
-6.  **Resource Management**: [Completed] Vertex Buffers and memory allocation.
-7.  **Uniforms & Descriptors**: [In Progress] Binding global data to shaders.
+## Current Progress: Phase 2 (Core Loop) - [COMPLETED]
+We have established the foundational graphics objects:
+1.  **Instance & Surface**: [Completed] Initialized and connected via Winit 0.30.
+2.  **Device Selection**: [Completed] Stable GPU selection logic.
+3.  **Swapchain**: [Completed] Robust presentation engine with explicit synchronization.
+4.  **Graphics Pipeline**: [Completed] Modern descriptor-based (BindGroup) pipeline.
+5.  **Commands & Rendering**: [Completed] Fully functional command recording and submission.
+6.  **Resource Management**: [Completed] Buffer (Vertex/Uniform) and Texture (SAMPLED_IMAGE) management via `gpu-allocator`.
+7.  **Uniforms & Descriptors**: [Completed] Stable bind group updates with pointer safety.
 
 ## Future Plans (Phase 3+)
 - **Resource Management**: Buffer and Texture allocation (VMA integration).
