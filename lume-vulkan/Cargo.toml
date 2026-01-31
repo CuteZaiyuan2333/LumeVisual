@@ -1,0 +1,10 @@
+[package]
+name = "lume-vulkan"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+lume-core = { path = "../lume-core" }
+ash = { workspace = true }
+log = { workspace = true }
+raw-window-handle = { workspace = true }

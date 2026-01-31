@@ -1,0 +1,8 @@
+[package]
+name = "lume-core"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+raw-window-handle = { workspace = true }
+log = { workspace = true }
