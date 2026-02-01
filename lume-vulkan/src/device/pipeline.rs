@@ -30,6 +30,7 @@ impl VulkanDevice {
             TextureFormat::Bgra8UnormSrgb => vk::Format::B8G8R8A8_SRGB,
             TextureFormat::Rgba8UnormSrgb => vk::Format::R8G8B8A8_SRGB,
             TextureFormat::Rgba8Unorm => vk::Format::R8G8B8A8_UNORM,
+            TextureFormat::Rg32Uint => vk::Format::R32G32_UINT,
             TextureFormat::Depth32Float => return Err(LumeError::Generic("Cannot use Depth32Float as color format")),
         };
 

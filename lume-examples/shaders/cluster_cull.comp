@@ -1,0 +1,78 @@
+#version 450
+
+struct Cluster {
+    vec4 center_radius;
+    uint vertex_offset;
+    uint triangle_offset;
+    uint vertex_count;
+    uint triangle_count;
+    uint _pad1;
+    float error_metric;
+};
+
+layout(std430, set = 0, binding = 0) readonly buffer ClusterBuffer {
+    Cluster clusters[];
+};
+
+// 输出：可见的 Cluster ID 列表
+layout(std430, set = 0, binding = 1) writeonly buffer VisibleClusters {
+    uint visible_indices[];
+};
+
+// 输出：用于 vkCmdDrawIndirect 的参数
+struct DrawIndexedIndirectCommand {
+    uint indexCount;
+    uint instanceCount;
+    uint firstIndex;
+    int  vertexOffset;
+    uint firstInstance;
+};
+
+layout(std430, set = 0, binding = 2) buffer DrawArgs {
+    uint count; // 可见集群数量
+    DrawIndexedIndirectCommand args[];
+};
+
+layout(push_constant) uniform Config {
+    mat4 view_proj;
+    vec4 frustum_planes[6];
+    vec3 camera_pos;
+    float screen_width;
+    float lod_threshold;
+} config;
+
+layout(local_size_x = 64) in;
+
+bool is_visible(vec3 center, float radius) {
+    for (int i = 0; i < 6; i++) {
+        if (dot(vec4(center, 1.0), config.frustum_planes[i]) < -radius) {
+            return false;
+        }
+    }
+    return true;
+}
+
+void main() {
+    uint gID = gl_GlobalInvocationID.x;
+    if (gID >= clusters.length()) return;
+
+    Cluster cluster = clusters[gID];
+    vec3 center = cluster.center_radius.xyz;
+    float radius = cluster.center_radius.w;
+
+    // 1. 视锥剔除
+    if (!is_visible(center, radius)) return;
+
+    // 2. LOD 选择 (简化版)
+    // 计算边界球到相机的距离
+    float dist = distance(center, config.camera_pos);
+    float projected_error = (cluster.error_metric * config.screen_width) / (dist * 2.0 * tan(0.785 / 2.0)); 
+    
+    // 如果误差过大，说明需要细分（但在本层级，我们只决定是否渲染当前节点）
+    // 在完整的 DAG 中，逻辑更复杂。这里我们假设只有一层或简单的距离剔除。
+    if (projected_error > config.lod_threshold) return;
+
+    // 3. 记录可见集群
+    uint slot = atomicAdd(count, 1);
+    visible_indices[slot] = gID;
+}

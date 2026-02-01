@@ -6,6 +6,7 @@ members = [
     "lume-metal",
     "lume-adaptrix",
     "lume-examples",
+    "lume-processor",
 ]
 
 [workspace.dependencies]
@@ -16,3 +17,4 @@ raw-window-handle = "0.6"
 ash = "0.38"
 image = "0.24"
 glam = "0.24"
+bytemuck = { version = "1.14", features = ["derive"] }

@@ -176,6 +176,7 @@ pub enum TextureFormat {
     Bgra8UnormSrgb,
     Rgba8UnormSrgb,
     Rgba8Unorm,
+    Rg32Uint,
     Depth32Float,
 }
 
@@ -327,8 +328,9 @@ impl BufferUsage {
     pub const INDEX: Self = Self(1 << 1);
     pub const UNIFORM: Self = Self(1 << 2);
     pub const STORAGE: Self = Self(1 << 3);
-    pub const COPY_SRC: Self = Self(1 << 4);
-    pub const COPY_DST: Self = Self(1 << 5);
+    pub const INDIRECT: Self = Self(1 << 4);
+    pub const COPY_SRC: Self = Self(1 << 5);
+    pub const COPY_DST: Self = Self(1 << 6);
 }
 
 impl std::ops::BitOr for BufferUsage {
@@ -369,6 +371,7 @@ pub enum BindingType {
     UniformBuffer,
     StorageBuffer,
     SampledTexture,
+    StorageTexture,
     Sampler,
 }
 

@@ -35,6 +35,7 @@ impl VulkanDevice {
                 BindingType::UniformBuffer => vk::DescriptorType::UNIFORM_BUFFER,
                 BindingType::StorageBuffer => vk::DescriptorType::STORAGE_BUFFER,
                 BindingType::SampledTexture => vk::DescriptorType::SAMPLED_IMAGE,
+                BindingType::StorageTexture => vk::DescriptorType::STORAGE_IMAGE,
                 BindingType::Sampler => vk::DescriptorType::SAMPLER,
             };
 
@@ -99,9 +100,14 @@ impl VulkanDevice {
                     });
                 }
                 lume_core::device::BindingResource::TextureView(view) => {
+                    let layout = if let Some(BindingType::StorageTexture) = descriptor.layout.entries.get(&entry.binding) {
+                        vk::ImageLayout::GENERAL
+                    } else {
+                        vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL
+                    };
                     final_image_infos.push(vk::DescriptorImageInfo {
                         image_view: view.view,
-                        image_layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+                        image_layout: layout,
                         ..Default::default()
                     });
                 }
@@ -138,11 +144,16 @@ impl VulkanDevice {
                     buffer_pointer += 1;
                 }
                 lume_core::device::BindingResource::TextureView(_) => {
+                    let vk_ty = match ty {
+                        BindingType::SampledTexture => vk::DescriptorType::SAMPLED_IMAGE,
+                        BindingType::StorageTexture => vk::DescriptorType::STORAGE_IMAGE,
+                        _ => return Err(LumeError::Generic("Mismatched binding type for texture")),
+                    };
                     writes.push(vk::WriteDescriptorSet {
                         dst_set: set,
                         dst_binding: entry.binding,
                         descriptor_count: 1,
-                        descriptor_type: vk::DescriptorType::SAMPLED_IMAGE,
+                        descriptor_type: vk_ty,
                         p_image_info: &final_image_infos[image_pointer],
                         ..Default::default()
                     });
