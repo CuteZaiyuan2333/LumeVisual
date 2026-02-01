@@ -1,7 +1,7 @@
 use ash::{vk};
 use lume_core::{Instance, InstanceDescriptor};
 use std::ffi::{CStr};
-use log::{info};
+use log::{info, warn};
 use crate::VulkanDevice;
 use gpu_allocator::vulkan::*;
 use gpu_allocator::AllocationSizes;
@@ -210,13 +210,36 @@ impl Instance for VulkanInstance {
             ..Default::default()
         };
 
-        let device_extension_names = [
+        let available_extensions = unsafe {
+            self.instance.enumerate_device_extension_properties(pdevice)
+                .map_err(|e| lume_core::LumeError::BackendError(format!("Failed to enumerate device extensions: {}", e)))?
+        };
+
+        let has_mesh_shader = available_extensions.iter().any(|ext| {
+            let name = unsafe { CStr::from_ptr(ext.extension_name.as_ptr()) };
+            name == ash::ext::mesh_shader::NAME
+        });
+
+        let mut device_extension_names = vec![
             ash::khr::swapchain::NAME.as_ptr(),
             #[cfg(target_os = "macos")]
             ash::vk::KhrPortabilitySubsetFn::name().as_ptr(),
         ];
 
-        let features13 = vk::PhysicalDeviceVulkan13Features {
+        if has_mesh_shader {
+            info!("Mesh Shader extension supported and enabled.");
+            device_extension_names.push(ash::ext::mesh_shader::NAME.as_ptr());
+        } else {
+            warn!("Mesh Shader extension NOT supported by this GPU.");
+        }
+
+        let features_mesh = vk::PhysicalDeviceMeshShaderFeaturesEXT {
+            mesh_shader: vk::TRUE,
+            task_shader: vk::TRUE,
+            ..Default::default()
+        };
+
+        let mut features13 = vk::PhysicalDeviceVulkan13Features {
             dynamic_rendering: vk::TRUE,
             synchronization2: vk::TRUE,
             ..Default::default()
@@ -242,8 +265,13 @@ impl Instance for VulkanInstance {
             ..Default::default()
         };
 
-        // Link features13 to features12
+        // Chain features: features12 -> features13
         features12.p_next = &features13 as *const _ as *mut std::ffi::c_void;
+        
+        if has_mesh_shader {
+            // Chain features13 -> features_mesh
+            features13.p_next = &features_mesh as *const _ as *mut std::ffi::c_void;
+        }
 
         let device = unsafe {
             self.instance.create_device(pdevice, &create_info, None)

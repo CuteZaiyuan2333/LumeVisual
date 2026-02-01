@@ -1,32 +1,29 @@
-# LumeVisual Design & Roadmap
+# LumeVisual 核心路线图：次世代虚拟化渲染
 
-## Core Vision
-LumeVisual is a modern, high-performance rendering library written in Rust. It aims to bridge the gap between low-level hardware control (Vulkan/Metal) and high-level game engine needs.
+## 核心愿景
+LumeVisual 是一款剔除传统光栅化与 LOD 逻辑的现代引擎。
+- **全虚拟化几何 (LOD-less)**: 基于 Adaptrix 的微多边形流送。
+- **动态全局光照 (Lumen-like)**: 基于 Surface Cache 与硬件光追的实时 GI。
+- **GPU 驱动架构**: 100% GPU 驱动的流水线，完全消除 CPU 提交瓶颈。
 
-### Key Goals
-- **Ray Tracing Native**: Designed from the ground up for Hardware Ray Tracing.
-- **Virtual Geometry**: Integrated support for massive asset streaming (inspired by Nanite).
-- **Static Backend**: Use of Rust's trait system for zero-overhead abstraction.
+## 开发阶段
 
-## Architecture
-The system is divided into several crates:
-- `lume-core`: Common traits and types. Backend agnostic.
-- `lume-vulkan`: Vulkan 1.3+ backend implementation.
-- `lume-metal`: Metal backend implementation (macOS/iOS).
-- `lume-adaptrix`: The virtual geometry and streaming engine.
+### 阶段 1: 基础设施 (已完成)
+- [x] Vulkan 1.3 现代后端封装。
+- [x] Bindless 资源索引 (10万级纹理/缓存支持)。
+- [x] 自动帧并行同步 (Frame-in-Flight)。
 
-## Current Progress: Phase 2 (Core Loop) - [COMPLETED]
-We have established the foundational graphics objects:
-1.  **Instance & Surface**: [Completed] Initialized and connected via Winit 0.30.
-2.  **Device Selection**: [Completed] Stable GPU selection logic.
-3.  **Swapchain**: [Completed] Robust presentation engine with explicit synchronization.
-4.  **Graphics Pipeline**: [Completed] Modern descriptor-based (BindGroup) pipeline.
-5.  **Commands & Rendering**: [Completed] Fully functional command recording and submission.
-6.  **Resource Management**: [Completed] Buffer (Vertex/Uniform) and Texture (SAMPLED_IMAGE) management via `gpu-allocator`.
-7.  **Uniforms & Descriptors**: [Completed] Stable bind group updates with pointer safety.
+### 阶段 2: Adaptrix 虚拟几何系统 (当前核心)
+- [ ] **几何集群化 (Clustering)**: 离线将 Mesh 划分为 128-256 顶点的集群。
+- [ ] **GPU 驱动剔除**: 基于 Compute Shader 的两级剔除（Instance & Cluster）。
+- [ ] **可见性缓冲 (VisBuffer)**: 实现高密度微多边形的 ID 渲染。
+- [ ] **虚拟化流送 (Streaming)**: 基于相机视锥的动态数据加载与 LRU 缓存。
 
-## Future Plans (Phase 3+)
-- **Resource Management**: Buffer and Texture allocation (VMA integration).
-- **Command Buffers**: High-level command recording API.
-- **Lume-RenderGraph**: A graph-based deferred/clustered renderer.
-- **Adaptrix Integration**: First prototypes of mesh shading and streaming.
+### 阶段 3: Lume-GI 光照系统 (计划中)
+- [ ] **表面缓存 (Surface Cache)**: 为虚拟几何集群生成并展开光照贴图缓存。
+- [ ] **硬件光追集成**: 使用 RT Core 加速间接光探测。
+- [ ] **辐射度传播**: 实现基于探针或漫反射路径追踪的全局光照。
+
+### 阶段 4: 后处理与集成
+- [ ] 时域超采样 (Temporal Super Resolution)。
+- [ ] 材质图元系统。

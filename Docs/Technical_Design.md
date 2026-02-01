@@ -1,36 +1,26 @@
-# LumeVisual: Technical Handoff & Virtual Geometry Guide
+# LumeVisual 技术设计方案
 
-## Architecture Overview
-LumeVisual is a trait-based rendering engine.
-- `lume-core`: Defines the protocol. Backend agnostic.
-- `lume-vulkan`: Vulkan 1.3 implementation. Uses `ash` and `gpu-allocator`.
-- `lume-adaptrix`: **[Target for next phase]** This module will implement Virtual Geometry.
+## 1. 渲染哲学：弃绝传统光栅化
+LumeVisual 不再支持 `vkCmdDrawIndexed` 渲染成千上万个小 Mesh 的传统模式，也不要求美术制作 LOD。
+- **唯一输入**: 高精度原始模型。
+- **唯一输出**: 由 Adaptrix 系统动态生成的可见像素。
 
-## Current Robustness Status
-1. **Synchronization**: Explicit sync is implemented via Semaphores. The example now uses `wait_idle()` per frame to ensure stability. **Next Step**: Implement a Frame-in-Flight system with Fences to improve performance.
-2. **Resource Management**: Buffers and Textures are managed via `gpu-allocator`. Uniform Buffers require alignment (usually 64 or 256 bytes depending on GPU).
-3. **Descriptor Management**: Moved to `lume-vulkan/src/descriptor.rs`. Uses a WebGPU-like BindGroup abstraction.
-4. **Safety**: Fixed critical pointer aliasing in `update_descriptor_sets`.
+## 2. 关键系统架构
 
-## For the next AI (Virtual Geometry Developer):
-### High-Level Goal
-Implement a Nanite-like streaming system in `lume-adaptrix`.
+### A. Adaptrix (虚拟几何系统)
+- **数据结构**: 几何体被切分为 Cluster。每个 Cluster 包含边界球（Bounding Sphere）和误差度量（Error Metric）。
+- **渲染管线**: 
+  - 使用 Compute Shader 进行剔除。
+  - 使用 Mesh Shader (或优化后的多重绘制) 渲染 ID 到 VisBuffer。
+- **去 LOD 化**: 系统根据屏幕误差自动选择合适的 Cluster 级别，实现无缝连续 LOD。
 
-### Technical Prerequisites
-1. **Mesh Shading**: You need to enable `VK_EXT_mesh_shader`. Check device features in `instance.rs`.
-2. **GPU Data Structures**: Virtual geometry relies on large `StorageBuffer`s (SSBOs) for cluster data and visibility buffers. 
-3. **Async Compute**: Adaptrix should ideally use a separate compute queue for cluster culling.
-4. **Bindless Textures**: For massive asset streaming, you must implement Bindless Descriptors (`VK_EXT_descriptor_indexing`).
+### B. Lume-GI (全局光照)
+- **解耦光照**: 光照计算在空间（Surface Cache）而非像素空间进行。
+- **混合追踪**:
+  - 近场: 硬件光线追踪 (VK_KHR_ray_tracing)。
+  - 远场: 高度场/SDF 或简化几何代理。
+- **反馈闭环**: 只有被 Adaptrix 标记为可见的 Cluster 才会触发 Surface Cache 的更新。
 
-### Known Technical Debt / Implementation Notes
-- **Texture Views**: Currently, `VulkanTextureView` only supports basic 2D views. Cubemaps/Arrays need extension.
-- **Error Handling**: Many `.expect()` calls remain in setup code. Consider converting to `LumeResult`.
-- **Memory Aliasing**: The `create_bind_group` implementation uses a stable-pointer workaround. It works but could be more idiomatic using a specialized arena.
-
-## Getting Started with Adaptrix
-1. Define `Cluster` and `Meshlet` structures in `lume-adaptrix`.
-2. Implement a GPU-driven culling pass using Compute Shaders.
-3. Integrate with the main `lume-vulkan` pipeline via `StorageBuffer` bindings.
-
----
-*Signed by: LumeVisual Bootstrap Agent (2026-02-01)*
+## 3. 待办技术债
+- [ ] **移除旧 API**: 彻底移除 `lume-vulkan` 中关于传统 RenderPass 的旧逻辑，全面转向单 Pass VisBuffer 架构。
+- [ ] **数据转换工具**: 需要编写一个处理 `.obj/.gltf` 并生成 Adaptrix 专有格式的工具。
