@@ -97,7 +97,7 @@ impl ApplicationHandler for App {
             upload_cmd.texture_barrier(&texture, ImageLayout::TransferDst, ImageLayout::ShaderReadOnly);
             upload_cmd.end().expect("Failed to end upload cmd");
 
-            device.submit(&[&upload_cmd], &[], &[]).expect("Failed to submit texture upload");
+            device.submit(&[&upload_cmd], &[], &[], None).expect("Failed to submit texture upload");
             device.wait_idle().expect("Wait idle failed");
 
             let texture_view = device.create_texture_view(&texture, TextureViewDescriptor {
@@ -405,6 +405,7 @@ impl ApplicationHandler for App {
                         &[cmd],
                         &[image_available],
                         &[render_finished],
+                        None,
                     ).expect("Failed to submit commands");
 
                     // 4. Present image

@@ -19,6 +19,7 @@ impl lume_core::Device for VulkanDevice {
     type Buffer = crate::VulkanBuffer;
     type BindGroupLayout = crate::VulkanBindGroupLayout;
     type BindGroup = crate::VulkanBindGroup;
+    type Fence = crate::VulkanFence;
 
     fn wait_idle(&self) -> LumeResult<()> {
         unsafe {
@@ -37,6 +38,38 @@ impl lume_core::Device for VulkanDevice {
             semaphore,
             device: self.inner.device.clone(),
         })
+    }
+
+    fn create_fence(&self, signaled: bool) -> LumeResult<Self::Fence> {
+        let flags = if signaled { vk::FenceCreateFlags::SIGNALED } else { vk::FenceCreateFlags::empty() };
+        let create_info = vk::FenceCreateInfo {
+            flags,
+            ..Default::default()
+        };
+        let fence = unsafe {
+            self.inner.device.create_fence(&create_info, None)
+                .map_err(|e| LumeError::ResourceCreationFailed(format!("Failed to create fence: {}", e)))?
+        };
+        Ok(crate::VulkanFence {
+            fence,
+            device: self.inner.device.clone(),
+        })
+    }
+
+    fn wait_for_fences(&self, fences: &[&Self::Fence], wait_all: bool, timeout: u64) -> LumeResult<()> {
+        let vk_fences: Vec<vk::Fence> = fences.iter().map(|f| f.fence).collect();
+        unsafe {
+            self.inner.device.wait_for_fences(&vk_fences, wait_all, timeout)
+                .map_err(|e| LumeError::BackendError(format!("Wait for fences failed: {}", e)))
+        }
+    }
+
+    fn reset_fences(&self, fences: &[&Self::Fence]) -> LumeResult<()> {
+        let vk_fences: Vec<vk::Fence> = fences.iter().map(|f| f.fence).collect();
+        unsafe {
+            self.inner.device.reset_fences(&vk_fences)
+                .map_err(|e| LumeError::BackendError(format!("Reset fences failed: {}", e)))
+        }
     }
 
     fn create_command_pool(&self) -> LumeResult<Self::CommandPool> {
@@ -62,6 +95,7 @@ impl lume_core::Device for VulkanDevice {
         command_buffers: &[&Self::CommandBuffer],
         wait_semaphores: &[&Self::Semaphore],
         signal_semaphores: &[&Self::Semaphore],
+        fence: Option<&Self::Fence>,
     ) -> LumeResult<()> {
         let vk_command_buffers: Vec<vk::CommandBuffer> = command_buffers.iter().map(|cb| cb.buffer).collect();
         let vk_wait_semaphores: Vec<vk::Semaphore> = wait_semaphores.iter().map(|s| s.semaphore).collect();
@@ -80,8 +114,10 @@ impl lume_core::Device for VulkanDevice {
             ..Default::default()
         };
 
+        let vk_fence = fence.map(|f| f.fence).unwrap_or(vk::Fence::null());
+
         unsafe {
-            self.inner.device.queue_submit(self.inner.graphics_queue, &[submit_info], vk::Fence::null())
+            self.inner.device.queue_submit(self.inner.graphics_queue, &[submit_info], vk_fence)
                 .map_err(|e| LumeError::SubmissionFailed(format!("Failed to submit command buffers: {}", e)))
         }
     }

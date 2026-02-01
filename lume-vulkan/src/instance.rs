@@ -73,7 +73,7 @@ impl Instance for VulkanInstance {
             application_version: 0,
             p_engine_name: engine_name.as_ptr(),
             engine_version: 0,
-            api_version: vk::make_api_version(0, 1, 0, 0),
+            api_version: vk::API_VERSION_1_3,
             ..Default::default()
         };
 
@@ -81,7 +81,12 @@ impl Instance for VulkanInstance {
         let extension_names = [
             ash::ext::debug_utils::NAME.as_ptr(),
             ash::khr::surface::NAME.as_ptr(),
+            #[cfg(target_os = "windows")]
             ash::khr::win32_surface::NAME.as_ptr(),
+            #[cfg(target_os = "linux")]
+            ash::khr::xlib_surface::NAME.as_ptr(),
+            #[cfg(target_os = "macos")]
+            ash::khr::portability_enumeration::NAME.as_ptr(),
         ];
 
         let create_info = vk::InstanceCreateInfo {
@@ -211,8 +216,24 @@ impl Instance for VulkanInstance {
             ash::vk::KhrPortabilitySubsetFn::name().as_ptr(),
         ];
 
+        let mut features13 = vk::PhysicalDeviceVulkan13Features {
+            dynamic_rendering: vk::TRUE,
+            synchronization2: vk::TRUE,
+            ..Default::default()
+        };
+
+        let mut features12 = vk::PhysicalDeviceVulkan12Features {
+            descriptor_indexing: vk::TRUE,
+            buffer_device_address: vk::TRUE,
+            runtime_descriptor_array: vk::TRUE,
+            descriptor_binding_variable_descriptor_count: vk::TRUE,
+            descriptor_binding_partially_bound: vk::TRUE,
+            ..Default::default()
+        };
+
         let features = vk::PhysicalDeviceFeatures::default();
         let create_info = vk::DeviceCreateInfo {
+            p_next: &features12 as *const _ as *const std::ffi::c_void,
             p_queue_create_infos: &queue_info,
             queue_create_info_count: 1,
             pp_enabled_extension_names: device_extension_names.as_ptr(),
@@ -220,6 +241,9 @@ impl Instance for VulkanInstance {
             p_enabled_features: &features,
             ..Default::default()
         };
+
+        // Link features13 to features12
+        features12.p_next = &features13 as *const _ as *mut std::ffi::c_void;
 
         let device = unsafe {
             self.instance.create_device(pdevice, &create_info, None)

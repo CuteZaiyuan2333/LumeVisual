@@ -15,12 +15,14 @@ pub trait Device: Sized + Clone {
     type BindGroupLayout: BindGroupLayout;
     type BindGroup: BindGroup;
     type Semaphore: Semaphore;
+    type Fence: Fence;
 
     /// Wait for the device to be idle.
     fn wait_idle(&self) -> crate::LumeResult<()>;
 
     fn create_command_pool(&self) -> crate::LumeResult<Self::CommandPool>;
     fn create_semaphore(&self) -> crate::LumeResult<Self::Semaphore>;
+    fn create_fence(&self, signaled: bool) -> crate::LumeResult<Self::Fence>;
 
     fn create_swapchain(
         &self,
@@ -47,7 +49,11 @@ pub trait Device: Sized + Clone {
         command_buffers: &[&Self::CommandBuffer],
         wait_semaphores: &[&Self::Semaphore],
         signal_semaphores: &[&Self::Semaphore],
+        fence: Option<&Self::Fence>,
     ) -> crate::LumeResult<()>;
+
+    fn wait_for_fences(&self, fences: &[&Self::Fence], wait_all: bool, timeout: u64) -> crate::LumeResult<()>;
+    fn reset_fences(&self, fences: &[&Self::Fence]) -> crate::LumeResult<()>;
 }
 
 pub trait CommandPool {
@@ -85,6 +91,7 @@ pub trait PipelineLayout {}
 pub trait GraphicsPipeline: Send + Sync {}
 pub trait ComputePipeline: Send + Sync {}
 pub trait Semaphore: Send + Sync {}
+pub trait Fence: Send + Sync {}
 pub trait Framebuffer {}
 pub trait TextureView {}
 pub trait Texture {
