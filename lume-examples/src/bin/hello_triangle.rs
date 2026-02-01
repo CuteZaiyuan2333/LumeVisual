@@ -368,17 +368,14 @@ impl ApplicationHandler for App {
                 event_loop.exit();
             }
             winit::event::WindowEvent::RedrawRequested => {
-                if let (Some(device), Some(swapchain), Some(image_available), Some(render_finished)) = (
+                if let (Some(device), Some(swapchain)) = (
                     &self.device,
                     self.swapchain.as_mut(),
-                    &self.image_available_semaphore,
-                    &self.render_finished_semaphore,
                 ) {
-                    // 1. Acquire next image
-                    let image_index = swapchain.acquire_next_image(image_available).expect("Failed to acquire next image");
+                    // 1. Begin Frame (Handles all Fence/Semaphore sync internally)
+                    let token = device.begin_frame(swapchain).expect("Failed to begin frame");
 
                     // 2. Update Uniforms (MVP)
-                    // ... (保持原有逻辑)
                     let now = SystemTime::now();
                     let duration = now.duration_since(self.start_time).unwrap();
                     let time = duration.as_secs_f32();
@@ -399,21 +396,10 @@ impl ApplicationHandler for App {
                         std::slice::from_raw_parts(mvp_bytes.as_ptr() as *const u8, 64)
                     }).expect("Failed to update uniform buffer");
 
-                    // 3. Submit command buffer
-                    let cmd = &self.command_buffers[image_index as usize];
-                    device.submit(
-                        &[cmd],
-                        &[image_available],
-                        &[render_finished],
-                        None,
-                    ).expect("Failed to submit commands");
-
-                    // 4. Present image
-                    swapchain.present(image_index, &[render_finished]).expect("Failed to present image");
-
-                    // 5. Wait for GPU to finish this frame before we start the next one
-                    // This prevents the uniform buffer from being overwritten while the GPU is still reading it
-                    device.wait_idle().expect("Failed to wait idle");
+                    // 3. Select Command Buffer and End Frame
+                    // Note: In a real engine, you'd record commands here or use pre-recorded ones
+                    let cmd = &self.command_buffers[token.image_index as usize];
+                    device.end_frame(swapchain, token, &[cmd]).expect("Failed to end frame");
                 }
             }
             _ => (),

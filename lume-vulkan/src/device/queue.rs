@@ -170,7 +170,124 @@ impl lume_core::Device for VulkanDevice {
         self.create_bind_group_impl(descriptor)
     }
 
-    fn create_swapchain(&self, surface: &impl lume_core::instance::Surface, descriptor: lume_core::device::SwapchainDescriptor) -> LumeResult<Self::Swapchain> {
-        self.create_swapchain_impl(surface, descriptor)
+        fn create_swapchain(&self, surface: &impl lume_core::instance::Surface, descriptor: lume_core::device::SwapchainDescriptor) -> LumeResult<Self::Swapchain> {
+
+            self.create_swapchain_impl(surface, descriptor)
+
+        }
+
+    
+
+        fn begin_frame(&self, swapchain: &mut Self::Swapchain) -> LumeResult<lume_core::device::FrameToken> {
+
+            let mut sync = self.inner.frame_sync.lock().unwrap();
+
+            let frame_index = sync.current_frame;
+
+    
+
+            // 1. Wait for the fence of the frame we are about to reuse
+
+            unsafe {
+
+                self.inner.device.wait_for_fences(&[sync.fences[frame_index]], true, u64::MAX)
+
+                    .map_err(|e| LumeError::BackendError(format!("Failed to wait for frame fence: {}", e)))?;
+
+                self.inner.device.reset_fences(&[sync.fences[frame_index]])
+
+                    .map_err(|e| LumeError::BackendError(format!("Failed to reset frame fence: {}", e)))?;
+
+            }
+
+    
+
+            // 2. Acquire next image from swapchain using the semaphore for this frame slot
+
+            let image_index = swapchain.acquire_next_image_raw(sync.image_available[frame_index])?;
+
+    
+
+            Ok(lume_core::device::FrameToken {
+
+                frame_index,
+
+                image_index,
+
+            })
+
+        }
+
+    
+
+        fn end_frame(&self, swapchain: &mut Self::Swapchain, token: lume_core::device::FrameToken, command_buffers: &[&Self::CommandBuffer]) -> LumeResult<()> {
+
+            let mut sync = self.inner.frame_sync.lock().unwrap();
+
+            let frame_index = token.frame_index;
+
+    
+
+            // 1. Submit command buffers
+
+            let vk_command_buffers: Vec<vk::CommandBuffer> = command_buffers.iter().map(|cb| cb.buffer).collect();
+
+            let wait_semaphores = [sync.image_available[frame_index]];
+
+            let signal_semaphores = [sync.render_finished[frame_index]];
+
+            let wait_stages = [vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT];
+
+    
+
+            let submit_info = vk::SubmitInfo {
+
+                wait_semaphore_count: 1,
+
+                p_wait_semaphores: wait_semaphores.as_ptr(),
+
+                p_wait_dst_stage_mask: wait_stages.as_ptr(),
+
+                command_buffer_count: vk_command_buffers.len() as u32,
+
+                p_command_buffers: vk_command_buffers.as_ptr(),
+
+                signal_semaphore_count: 1,
+
+                p_signal_semaphores: signal_semaphores.as_ptr(),
+
+                ..Default::default()
+
+            };
+
+    
+
+            unsafe {
+
+                self.inner.device.queue_submit(self.inner.graphics_queue, &[submit_info], sync.fences[frame_index])
+
+                    .map_err(|e| LumeError::SubmissionFailed(format!("Failed to submit frame commands: {}", e)))?;
+
+            }
+
+    
+
+            // 2. Present
+
+            swapchain.present_raw(token.image_index, &signal_semaphores)?;
+
+    
+
+            // 3. Move to next frame slot
+
+            sync.current_frame = (sync.current_frame + 1) % sync.frames_in_flight;
+
+    
+
+            Ok(())
+
+        }
+
     }
-}
+
+    

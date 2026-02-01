@@ -201,7 +201,85 @@ impl lume_core::device::CommandBuffer for VulkanCommandBuffer {
         }
     }
 
-    fn bind_graphics_pipeline(&mut self, pipeline: &crate::VulkanGraphicsPipeline) {
+    fn begin_rendering(&mut self, descriptor: lume_core::device::RenderingDescriptor<Self::Device>) {
+        let color_attachments: Vec<vk::RenderingAttachmentInfo> = descriptor.color_attachments.iter().map(|at| {
+            let clear_value = match at.clear_value {
+                lume_core::device::ClearValue::Color(c) => vk::ClearValue {
+                    color: vk::ClearColorValue { float32: c },
+                },
+                _ => vk::ClearValue::default(),
+            };
+
+            vk::RenderingAttachmentInfo {
+                image_view: at.view.view,
+                image_layout: match at.layout {
+                    lume_core::device::ImageLayout::General => vk::ImageLayout::GENERAL,
+                    lume_core::device::ImageLayout::ShaderReadOnly => vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+                    _ => vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
+                },
+                load_op: match at.load_op {
+                    lume_core::device::AttachmentLoadOp::Load => vk::AttachmentLoadOp::LOAD,
+                    lume_core::device::AttachmentLoadOp::Clear => vk::AttachmentLoadOp::CLEAR,
+                    lume_core::device::AttachmentLoadOp::DontCare => vk::AttachmentLoadOp::DONT_CARE,
+                },
+                store_op: match at.store_op {
+                    lume_core::device::AttachmentStoreOp::Store => vk::AttachmentStoreOp::STORE,
+                    lume_core::device::AttachmentStoreOp::DontCare => vk::AttachmentStoreOp::DONT_CARE,
+                },
+                clear_value,
+                ..Default::default()
+            }
+        }).collect();
+
+        let depth_attachment = descriptor.depth_attachment.map(|at| {
+            let clear_value = match at.clear_value {
+                lume_core::device::ClearValue::DepthStencil(d, s) => vk::ClearValue {
+                    depth_stencil: vk::ClearDepthStencilValue { depth: d, stencil: s },
+                },
+                _ => vk::ClearValue::default(),
+            };
+
+            vk::RenderingAttachmentInfo {
+                image_view: at.view.view,
+                image_layout: vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+                load_op: match at.load_op {
+                    lume_core::device::AttachmentLoadOp::Load => vk::AttachmentLoadOp::LOAD,
+                    lume_core::device::AttachmentLoadOp::Clear => vk::AttachmentLoadOp::CLEAR,
+                    lume_core::device::AttachmentLoadOp::DontCare => vk::AttachmentLoadOp::DONT_CARE,
+                },
+                store_op: match at.store_op {
+                    lume_core::device::AttachmentStoreOp::Store => vk::AttachmentStoreOp::STORE,
+                    lume_core::device::AttachmentStoreOp::DontCare => vk::AttachmentStoreOp::DONT_CARE,
+                },
+                clear_value,
+                ..Default::default()
+            }
+        });
+
+        let rendering_info = vk::RenderingInfo {
+            render_area: vk::Rect2D {
+                offset: vk::Offset2D { x: 0, y: 0 },
+                extent: vk::Extent2D { width: 10000, height: 10000 }, // Needs proper extent
+            },
+            layer_count: 1,
+            color_attachment_count: color_attachments.len() as u32,
+            p_color_attachments: color_attachments.as_ptr(),
+            p_depth_attachment: depth_attachment.as_ref().map(|at| at as *const _).unwrap_or(std::ptr::null()),
+            ..Default::default()
+        };
+
+        unsafe {
+            self.device.cmd_begin_rendering(self.buffer, &rendering_info);
+        }
+    }
+
+    fn end_rendering(&mut self) {
+        unsafe {
+            self.device.cmd_end_rendering(self.buffer);
+        }
+    }
+
+    fn bind_graphics_pipeline(&mut self, pipeline: &<Self::Device as lume_core::Device>::GraphicsPipeline) {
         unsafe {
             self.device.cmd_bind_pipeline(self.buffer, vk::PipelineBindPoint::GRAPHICS, pipeline.pipeline);
             self.current_pipeline_layout = pipeline.layout;

@@ -85,3 +85,40 @@ impl lume_core::device::Swapchain for VulkanSwapchain {
         &self.image_views[index as usize]
     }
 }
+
+impl VulkanSwapchain {
+    pub fn acquire_next_image_raw(&mut self, signal_semaphore: vk::Semaphore) -> lume_core::LumeResult<u32> {
+        unsafe {
+            let (index, _is_suboptimal) = self.swapchain_loader
+                .acquire_next_image(
+                    self.swapchain,
+                    u64::MAX,
+                    signal_semaphore,
+                    vk::Fence::null(),
+                )
+                .map_err(|e| lume_core::LumeError::BackendError(format!("Failed to acquire next image: {}", e)))?;
+            Ok(index)
+        }
+    }
+
+    pub fn present_raw(&mut self, image_index: u32, wait_semaphores: &[vk::Semaphore]) -> lume_core::LumeResult<()> {
+        let swapchains = [self.swapchain];
+        let image_indices = [image_index];
+        
+        let present_info = vk::PresentInfoKHR {
+            wait_semaphore_count: wait_semaphores.len() as u32,
+            p_wait_semaphores: wait_semaphores.as_ptr(),
+            swapchain_count: 1,
+            p_swapchains: swapchains.as_ptr(),
+            p_image_indices: image_indices.as_ptr(),
+            ..Default::default()
+        };
+
+        unsafe {
+            self.swapchain_loader
+                .queue_present(self.present_queue, &present_info)
+                .map_err(|e| lume_core::LumeError::BackendError(format!("Queue present failed: {}", e)))?;
+        }
+        Ok(())
+    }
+}

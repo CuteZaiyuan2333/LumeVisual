@@ -43,6 +43,14 @@ pub trait Device: Sized + Clone {
     fn create_bind_group_layout(&self, descriptor: BindGroupLayoutDescriptor) -> crate::LumeResult<Self::BindGroupLayout>;
     fn create_bind_group(&self, descriptor: BindGroupDescriptor<Self>) -> crate::LumeResult<Self::BindGroup>;
 
+    // --- High-level Backend Engine API ---
+    
+    /// Starts a new frame, handles synchronization, and returns the frame index and swapchain image index.
+    fn begin_frame(&self, swapchain: &mut Self::Swapchain) -> crate::LumeResult<FrameToken>;
+    
+    /// Submits the recorded command buffers for the current frame and presents.
+    fn end_frame(&self, swapchain: &mut Self::Swapchain, token: FrameToken, command_buffers: &[&Self::CommandBuffer]) -> crate::LumeResult<()>;
+
     /// Submit command buffers to the graphics queue.
     fn submit(
         &self,
@@ -54,6 +62,11 @@ pub trait Device: Sized + Clone {
 
     fn wait_for_fences(&self, fences: &[&Self::Fence], wait_all: bool, timeout: u64) -> crate::LumeResult<()>;
     fn reset_fences(&self, fences: &[&Self::Fence]) -> crate::LumeResult<()>;
+}
+
+pub struct FrameToken {
+    pub frame_index: usize,
+    pub image_index: u32,
 }
 
 pub trait CommandPool {
@@ -71,6 +84,10 @@ pub trait CommandBuffer {
     fn begin_render_pass(&mut self, render_pass: &<Self::Device as Device>::RenderPass, framebuffer: &<Self::Device as Device>::Framebuffer, clear_color: [f32; 4]);
     fn end_render_pass(&mut self);
 
+    /// Modern Vulkan 1.3+ Dynamic Rendering
+    fn begin_rendering(&mut self, descriptor: RenderingDescriptor<Self::Device>);
+    fn end_rendering(&mut self);
+
     fn bind_graphics_pipeline(&mut self, pipeline: &<Self::Device as Device>::GraphicsPipeline);
     fn bind_compute_pipeline(&mut self, pipeline: &<Self::Device as Device>::ComputePipeline);
     fn bind_vertex_buffer(&mut self, buffer: &<Self::Device as Device>::Buffer);
@@ -83,6 +100,37 @@ pub trait CommandBuffer {
     fn copy_buffer_to_texture(&mut self, buffer: &<Self::Device as Device>::Buffer, texture: &<Self::Device as Device>::Texture, width: u32, height: u32);
     fn texture_barrier(&mut self, texture: &<Self::Device as Device>::Texture, old_layout: ImageLayout, new_layout: ImageLayout);
     fn compute_barrier(&mut self);
+}
+
+pub struct RenderingDescriptor<'a, D: Device> {
+    pub color_attachments: &'a [RenderingAttachment<'a, D>],
+    pub depth_attachment: Option<RenderingAttachment<'a, D>>,
+    pub stencil_attachment: Option<RenderingAttachment<'a, D>>,
+    pub view_mask: u32,
+}
+
+pub struct RenderingAttachment<'a, D: Device> {
+    pub view: &'a D::TextureView,
+    pub layout: ImageLayout,
+    pub load_op: AttachmentLoadOp,
+    pub store_op: AttachmentStoreOp,
+    pub clear_value: ClearValue,
+}
+
+pub enum AttachmentLoadOp {
+    Load,
+    Clear,
+    DontCare,
+}
+
+pub enum AttachmentStoreOp {
+    Store,
+    DontCare,
+}
+
+pub enum ClearValue {
+    Color([f32; 4]),
+    DepthStencil(f32, u32),
 }
 
 pub trait ShaderModule {}

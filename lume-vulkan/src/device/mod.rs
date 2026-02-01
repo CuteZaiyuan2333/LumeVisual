@@ -11,6 +11,17 @@ pub struct VulkanDeviceInner {
     pub physical_device: vk::PhysicalDevice,
     pub device: ash::Device,
     pub instance: ash::Instance,
+    
+    // Frame-in-flight management
+    pub frame_sync: Mutex<VulkanFrameSyncManager>,
+}
+
+pub struct VulkanFrameSyncManager {
+    pub current_frame: usize,
+    pub frames_in_flight: usize,
+    pub fences: Vec<vk::Fence>,
+    pub image_available: Vec<vk::Semaphore>,
+    pub render_finished: Vec<vk::Semaphore>,
 }
 
 #[derive(Clone)]
@@ -53,6 +64,24 @@ impl VulkanDevice {
             device.create_descriptor_pool(&pool_info, None).expect("Failed to create descriptor pool")
         };
 
+        let frames_in_flight = 2; // Default double buffering
+        let mut fences = Vec::new();
+        let mut image_available = Vec::new();
+        let mut render_finished = Vec::new();
+
+        for _ in 0..frames_in_flight {
+            let fence_info = vk::FenceCreateInfo {
+                flags: vk::FenceCreateFlags::SIGNALED,
+                ..Default::default()
+            };
+            let sem_info = vk::SemaphoreCreateInfo::default();
+            unsafe {
+                fences.push(device.create_fence(&fence_info, None).unwrap());
+                image_available.push(device.create_semaphore(&sem_info, None).unwrap());
+                render_finished.push(device.create_semaphore(&sem_info, None).unwrap());
+            }
+        }
+
         Self {
             inner: Arc::new(VulkanDeviceInner {
                 instance,
@@ -63,6 +92,13 @@ impl VulkanDevice {
                 graphics_queue_index,
                 descriptor_pool,
                 allocator,
+                frame_sync: Mutex::new(VulkanFrameSyncManager {
+                    current_frame: 0,
+                    frames_in_flight,
+                    fences,
+                    image_available,
+                    render_finished,
+                }),
             }),
         }
     }
@@ -71,7 +107,13 @@ impl VulkanDevice {
 impl Drop for VulkanDeviceInner {
     fn drop(&mut self) {
         unsafe {
-            log::info!("Destroying Vulkan Device and Descriptor Pool");
+            log::info!("Destroying Vulkan Device and Synchronization Objects");
+            let mut sync = self.frame_sync.lock().unwrap();
+            for i in 0..sync.frames_in_flight {
+                self.device.destroy_fence(sync.fences[i], None);
+                self.device.destroy_semaphore(sync.image_available[i], None);
+                self.device.destroy_semaphore(sync.render_finished[i], None);
+            }
             self.allocator.take();
             self.device.destroy_descriptor_pool(self.descriptor_pool, None);
             self.device.destroy_device(None);
