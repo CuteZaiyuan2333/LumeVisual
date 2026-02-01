@@ -114,8 +114,47 @@ pub struct VulkanCommandBuffer {
 }
 
 impl VulkanCommandBuffer {
-    pub fn set_current_pipeline_layout(&mut self, layout: vk::PipelineLayout) {
-        self.current_pipeline_layout = layout;
+    fn internal_barrier(&self, view: &crate::VulkanTextureView, target_layout: vk::ImageLayout) {
+        let mut current_layout = view.current_layout.lock().unwrap();
+        if *current_layout == target_layout {
+            return;
+        }
+
+        let image_barrier = vk::ImageMemoryBarrier2 {
+            src_stage_mask: vk::PipelineStageFlags2::ALL_COMMANDS,
+            src_access_mask: vk::AccessFlags2::MEMORY_WRITE | vk::AccessFlags2::MEMORY_READ,
+            dst_stage_mask: vk::PipelineStageFlags2::ALL_COMMANDS,
+            dst_access_mask: vk::AccessFlags2::MEMORY_WRITE | vk::AccessFlags2::MEMORY_READ,
+            old_layout: *current_layout,
+            new_layout: target_layout,
+            image: view.image,
+            subresource_range: vk::ImageSubresourceRange {
+                aspect_mask: vk::ImageAspectFlags::COLOR,
+                base_mip_level: 0,
+                level_count: 1,
+                base_array_layer: 0,
+                layer_count: 1,
+            },
+            ..Default::default()
+        };
+
+        // Correct aspect mask based on layout/usage if needed, but for now we assume color or let it pass
+        let mut barrier_cloned = image_barrier;
+        if target_layout == vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL {
+            barrier_cloned.subresource_range.aspect_mask = vk::ImageAspectFlags::DEPTH;
+        }
+
+        let dependency_info = vk::DependencyInfo {
+            image_memory_barrier_count: 1,
+            p_image_memory_barriers: &barrier_cloned,
+            ..Default::default()
+        };
+
+        unsafe {
+            self.device.cmd_pipeline_barrier2(self.buffer, &dependency_info);
+        }
+
+        *current_layout = target_layout;
     }
 }
 
@@ -202,6 +241,21 @@ impl lume_core::device::CommandBuffer for VulkanCommandBuffer {
     }
 
     fn begin_rendering(&mut self, descriptor: lume_core::device::RenderingDescriptor<Self::Device>) {
+        // 1. Automatic Transitions
+        for at in descriptor.color_attachments {
+            let target_layout = match at.layout {
+                lume_core::device::ImageLayout::General => vk::ImageLayout::GENERAL,
+                lume_core::device::ImageLayout::ShaderReadOnly => vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+                _ => vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
+            };
+            self.internal_barrier(at.view, target_layout);
+        }
+
+        if let Some(ref at) = descriptor.depth_attachment {
+            self.internal_barrier(at.view, vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
+        }
+
+        // 2. Build Rendering Info (Existing logic improved)
         let color_attachments: Vec<vk::RenderingAttachmentInfo> = descriptor.color_attachments.iter().map(|at| {
             let clear_value = match at.clear_value {
                 lume_core::device::ClearValue::Color(c) => vk::ClearValue {
@@ -231,7 +285,7 @@ impl lume_core::device::CommandBuffer for VulkanCommandBuffer {
             }
         }).collect();
 
-        let depth_attachment = descriptor.depth_attachment.map(|at| {
+        let depth_attachment = descriptor.depth_attachment.as_ref().map(|at| {
             let clear_value = match at.clear_value {
                 lume_core::device::ClearValue::DepthStencil(d, s) => vk::ClearValue {
                     depth_stencil: vk::ClearDepthStencilValue { depth: d, stencil: s },
@@ -256,11 +310,22 @@ impl lume_core::device::CommandBuffer for VulkanCommandBuffer {
             }
         });
 
-        let rendering_info = vk::RenderingInfo {
-            render_area: vk::Rect2D {
+        let render_area = if let Some(at) = descriptor.color_attachments.first() {
+            vk::Rect2D {
                 offset: vk::Offset2D { x: 0, y: 0 },
-                extent: vk::Extent2D { width: 10000, height: 10000 }, // Needs proper extent
-            },
+                extent: at.view.extent,
+            }
+        } else if let Some(at) = &descriptor.depth_attachment {
+            vk::Rect2D {
+                offset: vk::Offset2D { x: 0, y: 0 },
+                extent: at.view.extent,
+            }
+        } else {
+            vk::Rect2D::default()
+        };
+
+        let rendering_info = vk::RenderingInfo {
+            render_area,
             layer_count: 1,
             color_attachment_count: color_attachments.len() as u32,
             p_color_attachments: color_attachments.as_ptr(),
@@ -475,19 +540,6 @@ fn map_layout(layout: lume_core::device::ImageLayout) -> vk::ImageLayout {
 }
 
 #[derive(Clone)]
-pub struct VulkanSemaphore {
-    pub semaphore: vk::Semaphore,
-    pub device: ash::Device,
-}
-
-impl Drop for VulkanSemaphore {
-    fn drop(&mut self) {
-        unsafe {
-            self.device.destroy_semaphore(self.semaphore, None);
-        }
-    }
-}
-
 pub struct VulkanFramebuffer {
     pub framebuffer: vk::Framebuffer,
     pub width: u32,
@@ -508,7 +560,6 @@ impl lume_core::device::RenderPass for VulkanRenderPass {}
 impl lume_core::device::PipelineLayout for VulkanPipelineLayout {}
 impl lume_core::device::GraphicsPipeline for VulkanGraphicsPipeline {}
 impl lume_core::device::ComputePipeline for VulkanComputePipeline {}
-impl lume_core::device::Semaphore for VulkanSemaphore {}
 impl lume_core::device::Framebuffer for VulkanFramebuffer {}
 
 // BindGroup and BindGroupLayout moved to descriptor.rs

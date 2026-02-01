@@ -5,6 +5,8 @@ use gpu_allocator::vulkan::Allocator;
 pub struct VulkanDeviceInner {
     pub allocator: Option<Arc<Mutex<Allocator>>>,
     pub descriptor_pool: vk::DescriptorPool,
+    pub bindless_descriptor_set: vk::DescriptorSet,
+    pub bindless_layout: vk::DescriptorSetLayout,
     pub graphics_queue_index: u32,
     pub present_queue: vk::Queue, 
     pub graphics_queue: vk::Queue,
@@ -46,17 +48,44 @@ impl VulkanDevice {
         allocator: Option<Arc<Mutex<Allocator>>>,
         physical_device: vk::PhysicalDevice,
     ) -> Self {
+        // Create Bindless Layout
+        let bindless_binding = vk::DescriptorSetLayoutBinding {
+            binding: 0,
+            descriptor_type: vk::DescriptorType::SAMPLED_IMAGE,
+            descriptor_count: 100000, // Large array for bindless
+            stage_flags: vk::ShaderStageFlags::ALL,
+            ..Default::default()
+        };
+
+        let binding_flags = [vk::DescriptorBindingFlags::PARTIALLY_BOUND | vk::DescriptorBindingFlags::UPDATE_AFTER_BIND];
+        let mut extended_info = vk::DescriptorSetLayoutBindingFlagsCreateInfo {
+            binding_count: 1,
+            p_binding_flags: binding_flags.as_ptr(),
+            ..Default::default()
+        };
+
+        let layout_info = vk::DescriptorSetLayoutCreateInfo {
+            p_next: &extended_info as *const _ as *const std::ffi::c_void,
+            flags: vk::DescriptorSetLayoutCreateFlags::UPDATE_AFTER_BIND_POOL,
+            binding_count: 1,
+            p_bindings: &bindless_binding,
+            ..Default::default()
+        };
+
+        let bindless_layout = unsafe { device.create_descriptor_set_layout(&layout_info, None).unwrap() };
+
         let pool_sizes = [
             vk::DescriptorPoolSize { ty: vk::DescriptorType::UNIFORM_BUFFER, descriptor_count: 1000 },
             vk::DescriptorPoolSize { ty: vk::DescriptorType::STORAGE_BUFFER, descriptor_count: 1000 },
-            vk::DescriptorPoolSize { ty: vk::DescriptorType::SAMPLED_IMAGE, descriptor_count: 1000 },
+            vk::DescriptorPoolSize { ty: vk::DescriptorType::SAMPLED_IMAGE, descriptor_count: 100000 },
             vk::DescriptorPoolSize { ty: vk::DescriptorType::SAMPLER, descriptor_count: 1000 },
         ];
 
         let pool_info = vk::DescriptorPoolCreateInfo {
+            flags: vk::DescriptorPoolCreateFlags::UPDATE_AFTER_BIND,
             pool_size_count: pool_sizes.len() as u32,
             p_pool_sizes: pool_sizes.as_ptr(),
-            max_sets: 1000,
+            max_sets: 2000,
             ..Default::default()
         };
 
@@ -64,7 +93,16 @@ impl VulkanDevice {
             device.create_descriptor_pool(&pool_info, None).expect("Failed to create descriptor pool")
         };
 
-        let frames_in_flight = 2; // Default double buffering
+        let alloc_info = vk::DescriptorSetAllocateInfo {
+            descriptor_pool,
+            descriptor_set_count: 1,
+            p_set_layouts: &bindless_layout,
+            ..Default::default()
+        };
+
+        let bindless_descriptor_set = unsafe { device.allocate_descriptor_sets(&alloc_info).unwrap()[0] };
+
+        let frames_in_flight = 2;
         let mut fences = Vec::new();
         let mut image_available = Vec::new();
         let mut render_finished = Vec::new();
@@ -91,6 +129,8 @@ impl VulkanDevice {
                 present_queue,
                 graphics_queue_index,
                 descriptor_pool,
+                bindless_descriptor_set,
+                bindless_layout,
                 allocator,
                 frame_sync: Mutex::new(VulkanFrameSyncManager {
                     current_frame: 0,
@@ -108,7 +148,8 @@ impl Drop for VulkanDeviceInner {
     fn drop(&mut self) {
         unsafe {
             log::info!("Destroying Vulkan Device and Synchronization Objects");
-            let mut sync = self.frame_sync.lock().unwrap();
+            self.device.destroy_descriptor_set_layout(self.bindless_layout, None);
+            let sync = self.frame_sync.lock().unwrap();
             for i in 0..sync.frames_in_flight {
                 self.device.destroy_fence(sync.fences[i], None);
                 self.device.destroy_semaphore(sync.image_available[i], None);
@@ -122,7 +163,7 @@ impl Drop for VulkanDeviceInner {
 }
 
 // Submodules for implementation
-mod resource;
+pub(crate) mod resource;
 mod pipeline;
 mod descriptor;
 mod queue;

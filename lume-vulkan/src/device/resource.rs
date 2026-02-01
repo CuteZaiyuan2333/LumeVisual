@@ -3,6 +3,7 @@ use gpu_allocator::vulkan::*;
 use gpu_allocator::MemoryLocation;
 use lume_core::{LumeError, LumeResult};
 use crate::VulkanDevice;
+use std::sync::{Arc, Mutex};
 
 impl VulkanDevice {
     pub fn create_buffer_impl(&self, descriptor: lume_core::device::BufferDescriptor) -> LumeResult<crate::VulkanBuffer> {
@@ -106,6 +107,7 @@ impl VulkanDevice {
             height: descriptor.height,
             allocator: allocator.clone(),
             device: self.inner.device.clone(),
+            current_layout: Arc::new(Mutex::new(vk::ImageLayout::UNDEFINED)),
         })
     }
 
@@ -160,6 +162,9 @@ impl VulkanDevice {
 
         Ok(crate::VulkanTextureView {
             view,
+            image: texture.image,
+            extent: vk::Extent2D { width: texture.width, height: texture.height },
+            current_layout: texture.current_layout.clone(),
             device: self.inner.device.clone(),
         })
     }
@@ -216,7 +221,13 @@ impl VulkanDevice {
                 ..Default::default()
             };
             let view = unsafe { self.inner.device.create_image_view(&iv_info, None).unwrap() };
-            image_views.push(crate::VulkanTextureView { view, device: self.inner.device.clone() });
+            image_views.push(crate::VulkanTextureView { 
+                view, 
+                image,
+                extent,
+                current_layout: Arc::new(Mutex::new(vk::ImageLayout::UNDEFINED)),
+                device: self.inner.device.clone() 
+            });
         }
 
         Ok(crate::VulkanSwapchain {

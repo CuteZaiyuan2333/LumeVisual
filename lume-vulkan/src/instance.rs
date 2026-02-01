@@ -216,7 +216,7 @@ impl Instance for VulkanInstance {
             ash::vk::KhrPortabilitySubsetFn::name().as_ptr(),
         ];
 
-        let mut features13 = vk::PhysicalDeviceVulkan13Features {
+        let features13 = vk::PhysicalDeviceVulkan13Features {
             dynamic_rendering: vk::TRUE,
             synchronization2: vk::TRUE,
             ..Default::default()

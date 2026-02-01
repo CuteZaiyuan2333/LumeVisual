@@ -10,6 +10,7 @@ pub struct VulkanTexture {
     pub height: u32,
     pub allocator: Arc<Mutex<Allocator>>,
     pub device: ash::Device,
+    pub current_layout: Arc<Mutex<vk::ImageLayout>>,
 }
 
 impl Drop for VulkanTexture {
@@ -26,6 +27,9 @@ impl lume_core::device::Texture for VulkanTexture {}
 
 pub struct VulkanTextureView {
     pub view: vk::ImageView,
+    pub image: vk::Image,
+    pub extent: vk::Extent2D,
+    pub current_layout: Arc<Mutex<vk::ImageLayout>>,
     pub device: ash::Device,
 }
 
