@@ -80,7 +80,7 @@ fn run_compute<D: Device>(device: &D) {
     cmd.compute_barrier();
     cmd.end().expect("Failed to end cmd");
 
-    device.submit(&[&cmd], &[], &[]).expect("Failed to submit compute cmd");
+    device.submit(&[&cmd], &[], &[], None).expect("Failed to submit compute cmd");
     device.wait_idle().expect("Wait idle failed");
 
     // 5. Read back

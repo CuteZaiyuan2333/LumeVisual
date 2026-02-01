@@ -58,7 +58,7 @@ impl VulkanDevice {
         };
 
         let binding_flags = [vk::DescriptorBindingFlags::PARTIALLY_BOUND | vk::DescriptorBindingFlags::UPDATE_AFTER_BIND];
-        let mut extended_info = vk::DescriptorSetLayoutBindingFlagsCreateInfo {
+        let extended_info = vk::DescriptorSetLayoutBindingFlagsCreateInfo {
             binding_count: 1,
             p_binding_flags: binding_flags.as_ptr(),
             ..Default::default()
