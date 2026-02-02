@@ -9,11 +9,21 @@ struct FragmentOutput {
 };
 
 @fragment
+
 fn main(in: VertexOutput) -> FragmentOutput {
+
     let depth = bitcast<u32>(in.position.z);
-    let id = (in.cluster_id << 10u) | (in.triangle_id & 0x3FFu);
+
+    // 核心修复：cluster_id + 1u，避免产生 0 号 ID
+
+    let id = ((in.cluster_id + 1u) << 10u) | (in.triangle_id & 0x3FFu);
+
     
+
     var out: FragmentOutput;
+
     out.vis_data = vec2<u32>(depth, id);
+
     return out;
+
 }

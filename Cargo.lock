@@ -914,6 +914,7 @@ dependencies = [
  "env_logger",
  "log",
  "lume-adaptrix",
+ "meshopt",
  "tobj",
 ]
 

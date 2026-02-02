@@ -97,6 +97,7 @@ pub trait CommandBuffer {
     fn draw(&mut self, vertex_count: u32, instance_count: u32, first_vertex: u32, first_instance: u32);
     fn dispatch(&mut self, x: u32, y: u32, z: u32);
     fn copy_buffer_to_buffer(&mut self, source: &<Self::Device as Device>::Buffer, destination: &<Self::Device as Device>::Buffer, size: u64);
+    fn copy_buffer_to_buffer_offset(&mut self, source: &<Self::Device as Device>::Buffer, src_offset: u64, destination: &<Self::Device as Device>::Buffer, dst_offset: u64, size: u64);
     fn copy_buffer_to_texture(&mut self, buffer: &<Self::Device as Device>::Buffer, texture: &<Self::Device as Device>::Texture, width: u32, height: u32);
     fn texture_barrier(&mut self, texture_view: &<Self::Device as Device>::TextureView, old_layout: ImageLayout, new_layout: ImageLayout);
     fn compute_barrier(&mut self);

@@ -23,6 +23,6 @@ pub fn process_mesh(
         });
     }
 
-    let mut builder = NaniteBuilder::new(vertices);
+    let builder = NaniteBuilder::new(vertices);
     builder.build(indices)
 }

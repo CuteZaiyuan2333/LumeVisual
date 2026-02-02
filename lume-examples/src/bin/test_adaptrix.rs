@@ -29,6 +29,7 @@ struct AdaptrixApp {
     primitive_index_buffer: Option<lume_vulkan::VulkanBuffer>,
     visible_clusters_buffer: Option<lume_vulkan::VulkanBuffer>,
     visible_count_buffer: Option<lume_vulkan::VulkanBuffer>,
+    zero_buffer: Option<lume_vulkan::VulkanBuffer>, // 用于清零的 Buffer
     view_buffer: Option<lume_vulkan::VulkanBuffer>,
 
     cull_pipeline: Option<lume_vulkan::VulkanComputePipeline>,
@@ -64,12 +65,10 @@ struct AdaptrixApp {
 #[repr(C, align(16))]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 struct ViewUniform {
-    view_proj: [f32; 16],
-    inv_view_proj: [f32; 16],
-    camera_pos: [f32; 3],
-    error_threshold: f32,
-    viewport_size: [f32; 2],
-    _pad: [f32; 2],
+    view_proj: [glam::Vec4; 4],
+    inv_view_proj: [glam::Vec4; 4],
+    camera_pos_and_threshold: glam::Vec4,
+    viewport_size: glam::Vec4,
 }
 
 impl AdaptrixApp {
@@ -77,12 +76,13 @@ impl AdaptrixApp {
         let path = if std::path::Path::new("猴头Atest.lad").exists() { "猴头Atest.lad" } else { "test.lad" };
         println!("Loading: {}", path);
         let asset: lume_adaptrix::AdaptrixFlatAsset = bincode::deserialize_from(File::open(path).unwrap()).unwrap();
+        println!("Loaded asset: {} clusters, {} vertices", asset.clusters.len(), asset.vertices.len());
         Self {
             window: None, instance: None, surface: None, device: None, swapchain: None,
             clusters: asset.clusters, vertices: asset.vertices, 
             vertex_indices: asset.meshlet_vertex_indices, primitive_indices: asset.meshlet_primitive_indices,
             cluster_buffer: None, vertex_buffer: None, vertex_index_buffer: None, primitive_index_buffer: None,
-            visible_clusters_buffer: None, visible_count_buffer: None, view_buffer: None,
+            visible_clusters_buffer: None, visible_count_buffer: None, zero_buffer: None, view_buffer: None,
             cull_pipeline: None, cull_layout: None, cull_bind_group_0: None, cull_bind_group_1: None,
             vis_pipeline: None, vis_layout: None, vis_bind_group_0: None, vis_bind_group_1: None,
             resolve_pipeline: None, resolve_layout: None, resolve_bind_group_0: None, resolve_bind_group_1: None,
@@ -106,7 +106,10 @@ impl AdaptrixApp {
         self.primitive_index_buffer = Some(device.create_buffer(BufferDescriptor { size: self.primitive_indices.len() as u64, usage: BufferUsage::STORAGE | BufferUsage::COPY_DST, mapped_at_creation: true }).unwrap());
         self.primitive_index_buffer.as_ref().unwrap().write_data(0, &self.primitive_indices).unwrap();
         self.visible_clusters_buffer = Some(device.create_buffer(BufferDescriptor { size: (self.clusters.len() * 4) as u64, usage: BufferUsage::STORAGE, mapped_at_creation: true }).unwrap());
-        self.visible_count_buffer = Some(device.create_buffer(BufferDescriptor { size: 16, usage: BufferUsage::STORAGE | BufferUsage::COPY_DST, mapped_at_creation: true }).unwrap());
+        self.visible_count_buffer = Some(device.create_buffer(BufferDescriptor { size: 16, usage: BufferUsage::STORAGE | BufferUsage::COPY_DST | BufferUsage::COPY_SRC, mapped_at_creation: true }).unwrap());
+        self.visible_count_buffer.as_ref().unwrap().write_data(0, bytemuck::cast_slice(&[372u32, 0, 0, 0])).unwrap();
+        self.zero_buffer = Some(device.create_buffer(BufferDescriptor { size: 16, usage: BufferUsage::COPY_SRC, mapped_at_creation: true }).unwrap());
+        self.zero_buffer.as_ref().unwrap().write_data(0, &[0u8; 16]).unwrap();
         self.view_buffer = Some(device.create_buffer(BufferDescriptor { size: 160, usage: BufferUsage::UNIFORM | BufferUsage::COPY_DST, mapped_at_creation: true }).unwrap());
 
         // Textures
@@ -126,7 +129,7 @@ impl AdaptrixApp {
         let bgl_c0 = device.create_bind_group_layout(BindGroupLayoutDescriptor { entries: vec![
             BindGroupLayoutEntry { binding: 0, visibility: ShaderStage::COMPUTE, ty: BindingType::StorageBuffer },
             BindGroupLayoutEntry { binding: 1, visibility: ShaderStage::COMPUTE, ty: BindingType::StorageBuffer },
-            BindGroupLayoutEntry { binding: 2, visibility: ShaderStage::COMPUTE, ty: BindingType::StorageBuffer },
+            BindGroupLayoutEntry { binding: 5, visibility: ShaderStage::COMPUTE, ty: BindingType::StorageBuffer },
         ] }).unwrap();
         let bgl_c1 = device.create_bind_group_layout(BindGroupLayoutDescriptor { entries: vec![BindGroupLayoutEntry { binding: 0, visibility: ShaderStage::COMPUTE, ty: BindingType::UniformBuffer }] }).unwrap();
         let l_cull = device.create_pipeline_layout(PipelineLayoutDescriptor { bind_group_layouts: &[&bgl_c0, &bgl_c1] }).unwrap();
@@ -134,7 +137,7 @@ impl AdaptrixApp {
         self.cull_bind_group_0 = Some(device.create_bind_group(BindGroupDescriptor { layout: &bgl_c0, entries: vec![
             BindGroupEntry { binding: 0, resource: BindingResource::Buffer(self.cluster_buffer.as_ref().unwrap()) },
             BindGroupEntry { binding: 1, resource: BindingResource::Buffer(self.visible_clusters_buffer.as_ref().unwrap()) },
-            BindGroupEntry { binding: 2, resource: BindingResource::Buffer(self.visible_count_buffer.as_ref().unwrap()) },
+            BindGroupEntry { binding: 5, resource: BindingResource::Buffer(self.visible_count_buffer.as_ref().unwrap()) },
         ] }).unwrap());
         self.cull_bind_group_1 = Some(device.create_bind_group(BindGroupDescriptor { layout: &bgl_c1, entries: vec![BindGroupEntry { binding: 0, resource: BindingResource::Buffer(self.view_buffer.as_ref().unwrap()) }] }).unwrap());
         self.cull_layout = Some(l_cull);
@@ -172,6 +175,7 @@ impl AdaptrixApp {
             BindGroupLayoutEntry { binding: 0, visibility: ShaderStage::FRAGMENT, ty: BindingType::StorageBuffer },
             BindGroupLayoutEntry { binding: 1, visibility: ShaderStage::FRAGMENT, ty: BindingType::StorageBuffer },
             BindGroupLayoutEntry { binding: 2, visibility: ShaderStage::FRAGMENT, ty: BindingType::StorageBuffer },
+            BindGroupLayoutEntry { binding: 3, visibility: ShaderStage::FRAGMENT, ty: BindingType::StorageBuffer },
         ] }).unwrap();
         let bgl_r1 = device.create_bind_group_layout(BindGroupLayoutDescriptor { entries: vec![BindGroupLayoutEntry { binding: 0, visibility: ShaderStage::FRAGMENT, ty: BindingType::UniformBuffer }, BindGroupLayoutEntry { binding: 1, visibility: ShaderStage::FRAGMENT, ty: BindingType::SampledTexture }] }).unwrap();
         let l_res = device.create_pipeline_layout(PipelineLayoutDescriptor { bind_group_layouts: &[&bgl_r0, &bgl_r1] }).unwrap();
@@ -180,6 +184,7 @@ impl AdaptrixApp {
             BindGroupEntry { binding: 0, resource: BindingResource::Buffer(self.cluster_buffer.as_ref().unwrap()) },
             BindGroupEntry { binding: 1, resource: BindingResource::Buffer(self.vertex_buffer.as_ref().unwrap()) },
             BindGroupEntry { binding: 2, resource: BindingResource::Buffer(self.vertex_index_buffer.as_ref().unwrap()) },
+            BindGroupEntry { binding: 3, resource: BindingResource::Buffer(self.primitive_index_buffer.as_ref().unwrap()) },
         ] }).unwrap());
         self.resolve_bind_group_1 = Some(device.create_bind_group(BindGroupDescriptor { layout: &bgl_r1, entries: vec![BindGroupEntry { binding: 0, resource: BindingResource::Buffer(self.view_buffer.as_ref().unwrap()) }, BindGroupEntry { binding: 1, resource: BindingResource::TextureView(self.vis_buffer_view.as_ref().unwrap()) }] }).unwrap());
         self.resolve_render_pass = Some(res_rp);
@@ -211,18 +216,33 @@ impl ApplicationHandler for AdaptrixApp {
                     let elapsed = self.start_time.elapsed().as_secs_f32();
                     let cam_pos = Vec3::new(elapsed.cos() * 8.0, 3.0, elapsed.sin() * 8.0);
                     let view_mat = Mat4::look_at_rh(cam_pos, Vec3::ZERO, Vec3::Y);
+                    let view_mat = Mat4::look_at_rh(cam_pos, Vec3::ZERO, Vec3::Y);
                     let mut proj = Mat4::perspective_rh(0.785, 1280.0/720.0, 0.1, 1000.0); proj.col_mut(1).y *= -1.0;
                     let vp = proj * view_mat;
+                    let inv_vp = vp.inverse();
                     
+                    let view_proj_cols = [vp.col(0), vp.col(1), vp.col(2), vp.col(3)];
+                    let inv_view_proj_cols = [inv_vp.col(0), inv_vp.col(1), inv_vp.col(2), inv_vp.col(3)];
+
                     self.view_buffer.as_ref().unwrap().write_data(0, bytemuck::bytes_of(&ViewUniform {
-                        view_proj: vp.to_cols_array(), inv_view_proj: vp.inverse().to_cols_array(),
-                        camera_pos: cam_pos.to_array(), error_threshold: 1.0, viewport_size: [1280.0, 720.0], _pad: [0.0; 2],
+                        view_proj: view_proj_cols,
+                        inv_view_proj: inv_view_proj_cols,
+                        camera_pos_and_threshold: glam::vec4(cam_pos.x, cam_pos.y, cam_pos.z, 50.0),
+                        viewport_size: glam::vec4(1280.0, 720.0, 0.0, 0.0),
                     })).unwrap();
-                    self.visible_count_buffer.as_ref().unwrap().write_data(0, bytemuck::cast_slice(&[372u32, 0, 0, 0])).unwrap();
 
                     let cmd = self.command_buffer.as_mut().unwrap();
                     cmd.reset().unwrap(); cmd.begin().unwrap();
+                    
+                    // 核心修复：正确清零 instance_count (offset 4)
+                    cmd.copy_buffer_to_buffer_offset(self.zero_buffer.as_ref().unwrap(), 0, self.visible_count_buffer.as_ref().unwrap(), 4, 4);
+                    cmd.compute_barrier();
+
                     cmd.bind_compute_pipeline(self.cull_pipeline.as_ref().unwrap());
+                    cmd.bind_bind_group(0, self.cull_bind_group_0.as_ref().unwrap());
+                    cmd.bind_bind_group(1, self.cull_bind_group_1.as_ref().unwrap());
+                    cmd.dispatch((self.clusters.len() as u32 + 63) / 64, 1, 1);
+                    cmd.compute_barrier();
                     cmd.bind_bind_group(0, self.cull_bind_group_0.as_ref().unwrap());
                     cmd.bind_bind_group(1, self.cull_bind_group_1.as_ref().unwrap());
                     cmd.dispatch((self.clusters.len() as u32 + 63) / 64, 1, 1);

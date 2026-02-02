@@ -28,8 +28,10 @@ struct View {
     view_proj: mat4x4<f32>,
     inv_view_proj: mat4x4<f32>,
     camera_pos: vec3<f32>,
+    pad0: f32,
     error_threshold: f32,
     viewport_size: vec2<f32>,
+    pad1: f32,
 }
 
 @group(0) @binding(0) var<storage, read> clusters: array<Cluster>;
