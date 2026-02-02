@@ -246,6 +246,12 @@ impl lume_core::device::CommandBuffer for VulkanCommandBuffer {
         }
     }
 
+    fn draw_indirect(&mut self, buffer: &crate::VulkanBuffer, offset: u64, draw_count: u32, stride: u32) {
+        unsafe {
+            self.device.cmd_draw_indirect(self.buffer, buffer.buffer, offset, draw_count, stride);
+        }
+    }
+
     fn dispatch(&mut self, x: u32, y: u32, z: u32) {
         unsafe {
             self.device.cmd_dispatch(self.buffer, x, y, z);

@@ -105,8 +105,8 @@ impl AdaptrixApp {
         self.primitive_index_buffer = Some(device.create_buffer(BufferDescriptor { size: self.primitive_indices.len() as u64, usage: BufferUsage::STORAGE | BufferUsage::COPY_DST, mapped_at_creation: true }).unwrap());
         self.primitive_index_buffer.as_ref().unwrap().write_data(0, &self.primitive_indices).unwrap();
         
-        self.visible_clusters_buffer = Some(device.create_buffer(BufferDescriptor { size: (self.clusters.len() * 4).max(1024 * 1024) as u64, usage: BufferUsage::STORAGE, mapped_at_creation: true }).unwrap());
-        self.visible_count_buffer = Some(device.create_buffer(BufferDescriptor { size: 16, usage: BufferUsage::STORAGE | BufferUsage::COPY_DST | BufferUsage::COPY_SRC, mapped_at_creation: true }).unwrap());
+        self.visible_clusters_buffer = Some(device.create_buffer(BufferDescriptor { size: (self.clusters.len() * 8).max(2048 * 1024) as u64, usage: BufferUsage::STORAGE, mapped_at_creation: true }).unwrap());
+        self.visible_count_buffer = Some(device.create_buffer(BufferDescriptor { size: 16, usage: BufferUsage::STORAGE | BufferUsage::COPY_DST | BufferUsage::COPY_SRC | BufferUsage::INDIRECT, mapped_at_creation: true }).unwrap());
         self.visible_count_buffer.as_ref().unwrap().write_data(0, bytemuck::cast_slice(&[372u32, 0, 0, 0])).unwrap();
         
         self.zero_buffer = Some(device.create_buffer(BufferDescriptor { size: 16, usage: BufferUsage::COPY_SRC, mapped_at_creation: true }).unwrap());
@@ -234,19 +234,34 @@ impl ApplicationHandler for AdaptrixApp {
                     
                     let cam_pos = Vec3::new(elapsed.cos() * 4.0, 1.0, elapsed.sin() * 4.0);
                     let view_mat = Mat4::look_at_rh(cam_pos, Vec3::ZERO, Vec3::Y);
-                    let mut proj = Mat4::perspective_rh(0.785, 1280.0/720.0, 0.1, 1000.0); proj.col_mut(1).y *= -1.0;
+                    let mut proj = Mat4::perspective_rh(0.785, 1280.0/720.0, 0.01, 1000.0); proj.col_mut(1).y *= -1.0;
                     let vp = proj * view_mat;
                     let inv_vp = vp.inverse();
                     
+                    let view_proj_cols = [vp.col(0), vp.col(1), vp.col(2), vp.col(3)];
+                    let inv_view_proj_cols = [inv_vp.col(0), inv_vp.col(1), inv_vp.col(2), inv_vp.col(3)];
+
                     self.view_buffer.as_ref().unwrap().write_data(0, bytemuck::bytes_of(&ViewUniform {
-                        view_proj: [vp.col(0), vp.col(1), vp.col(2), vp.col(3)],
-                        inv_view_proj: [inv_vp.col(0), inv_vp.col(1), inv_vp.col(2), inv_vp.col(3)],
+                        view_proj: view_proj_cols,
+                        inv_view_proj: inv_view_proj_cols,
                         camera_pos_and_threshold: glam::vec4(cam_pos.x, cam_pos.y, cam_pos.z, 1.5), // 1.5 像素误差
                         viewport_size: glam::vec4(1280.0, 720.0, 0.0, 0.0),
                     })).unwrap();
 
                     let cmd = self.command_buffer.as_mut().unwrap();
                     cmd.reset().unwrap(); cmd.begin().unwrap();
+                    
+                    // 偶尔读取一下 GPU 计数用于调试
+                    static mut FRAME_COUNT: u32 = 0;
+                    unsafe {
+                        FRAME_COUNT += 1;
+                        if FRAME_COUNT % 100 == 0 {
+                            let _ = device.wait_idle(); // 强制同步
+                            let mut counts = [0u32; 4];
+                            let _ = self.visible_count_buffer.as_ref().unwrap().read_data(0, bytemuck::cast_slice_mut(&mut counts));
+                            println!("Visible clusters: {}", counts[1]); 
+                        }
+                    }
                     
                     cmd.copy_buffer_to_buffer_offset(self.zero_buffer.as_ref().unwrap(), 0, self.visible_count_buffer.as_ref().unwrap(), 4, 4);
                     cmd.compute_barrier();
@@ -263,7 +278,9 @@ impl ApplicationHandler for AdaptrixApp {
                     cmd.bind_graphics_pipeline(self.vis_pipeline.as_ref().unwrap());
                     cmd.bind_bind_group(0, self.vis_bind_group_0.as_ref().unwrap());
                     cmd.bind_bind_group(1, self.vis_bind_group_1.as_ref().unwrap());
-                    cmd.draw(372, self.clusters.len() as u32, 0, 0); 
+                    
+                    // 核心修复：使用 DrawIndirect，由 GPU 决定绘制多少
+                    cmd.draw_indirect(self.visible_count_buffer.as_ref().unwrap(), 0, 1, 16);
                     cmd.end_render_pass();
 
                     cmd.texture_barrier(self.vis_buffer_view.as_ref().unwrap(), ImageLayout::ColorAttachment, ImageLayout::ShaderReadOnly);

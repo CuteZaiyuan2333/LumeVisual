@@ -197,7 +197,7 @@ impl VulkanDevice {
             polygon_mode: vk::PolygonMode::FILL,
             line_width: 1.0,
             cull_mode: crate::device::resource::map_cull_mode(descriptor.primitive.cull_mode),
-            front_face: vk::FrontFace::CLOCKWISE,
+            front_face: vk::FrontFace::COUNTER_CLOCKWISE,
             ..Default::default()
         };
 

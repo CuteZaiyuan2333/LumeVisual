@@ -10,28 +10,23 @@ struct Cluster {
     pad2: u32,
 }
 
-// 关键修正：使用平铺的 f32 确保 32 字节对齐
 struct AdaptrixVertex {
     px: f32, py: f32, pz: f32,
     nx: f32, ny: f32, nz: f32,
     u: f32, v: f32,
 }
 
-struct DrawArgs {
-    vertex_count: u32,
-    instance_count: u32,
-    first_vertex: u32,
-    first_instance: u32,
-}
-
 struct View {
-    view_proj: mat4x4<f32>,
-    inv_view_proj: mat4x4<f32>,
-    camera_pos: vec3<f32>,
-    pad0: f32,
-    error_threshold: f32,
-    viewport_size: vec2<f32>,
-    pad1: f32,
+    view_proj_0: vec4<f32>,
+    view_proj_1: vec4<f32>,
+    view_proj_2: vec4<f32>,
+    view_proj_3: vec4<f32>,
+    inv_view_proj_0: vec4<f32>,
+    inv_view_proj_1: vec4<f32>,
+    inv_view_proj_2: vec4<f32>,
+    inv_view_proj_3: vec4<f32>,
+    camera_pos_and_threshold: vec4<f32>,
+    viewport_size: vec4<f32>,
 }
 
 @group(0) @binding(0) var<storage, read> clusters: array<Cluster>;
@@ -39,7 +34,6 @@ struct View {
 @group(0) @binding(2) var<storage, read> meshlet_vertex_indices: array<u32>;
 @group(0) @binding(3) var<storage, read> visible_clusters: array<u32>;
 @group(0) @binding(4) var<storage, read> primitive_indices: array<u32>;
-@group(0) @binding(5) var<storage, read> draw_args: DrawArgs;
 
 @group(1) @binding(0) var<uniform> view: View;
 
@@ -51,16 +45,16 @@ struct VertexOutput {
 
 @vertex
 fn main(@builtin(instance_index) instance_idx: u32, @builtin(vertex_index) vertex_idx: u32) -> VertexOutput {
-    if (instance_idx >= draw_args.instance_count) {
-        return dummy_output();
-    }
+    let view_proj = mat4x4<f32>(view.view_proj_0, view.view_proj_1, view.view_proj_2, view.view_proj_3);
 
+    // 此时硬件已通过 DrawIndirect 过滤了 instance_idx
     let cluster_id = visible_clusters[instance_idx];
     let cluster = clusters[cluster_id];
     
     let triangle_count = (cluster.counts >> 8u) & 0xFFu;
     let triangle_id = vertex_idx / 3u;
     
+    // 尽管有 DrawIndirect，但 meshlet 内部的 vertex_idx 仍然可能超出当前 meshlet 的三角形数
     if (triangle_id >= triangle_count) {
         return dummy_output();
     }
@@ -75,8 +69,7 @@ fn main(@builtin(instance_index) instance_idx: u32, @builtin(vertex_index) verte
     let vertex = vertices[global_v_idx];
     
     var out: VertexOutput;
-    // 显式构建 vec3，确保不受对齐干扰
-    out.position = view.view_proj * vec4<f32>(vertex.px, vertex.py, vertex.pz, 1.0);
+    out.position = view_proj * vec4<f32>(vertex.px, vertex.py, vertex.pz, 1.0);
     out.cluster_id = cluster_id;
     out.triangle_id = triangle_id;
     return out;
@@ -84,7 +77,6 @@ fn main(@builtin(instance_index) instance_idx: u32, @builtin(vertex_index) verte
 
 fn dummy_output() -> VertexOutput {
     var out: VertexOutput;
-    // w 设为 1.0，防止除零，z 设为 2.0 确保在远平面外被剔除
     out.position = vec4<f32>(0.0, 0.0, 2.0, 1.0); 
     return out;
 }

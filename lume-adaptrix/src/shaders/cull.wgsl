@@ -43,20 +43,20 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
 
     let cluster = all_clusters[cluster_idx];
     let camera_pos = view.camera_pos_and_threshold.xyz;
-    let threshold_px = view.camera_pos_and_threshold.w; // 这里的阈值现在代表“像素”
+    let threshold_px = view.camera_pos_and_threshold.w; 
 
-    // 计算到边界球的最近距离
+    // 计算到边界球的距离
     let dist = max(length(cluster.center_radius.xyz - camera_pos) - cluster.center_radius.w, 0.0001);
     
-    // --- 仿 Nanite 投影误差公式 ---
-    // ProjectedError = (WorldError * ViewportHeight) / (2.0 * dist * tan(FOV/2))
-    // 假设 tan(FOV/2) 为 0.414 (对应 45度)
+    // 投影误差公式
     let screen_factor = view.viewport_size.y / (2.0 * 0.414);
     let error_px = (cluster.lod_error * screen_factor) / dist;
     let parent_error_px = (cluster.parent_error * screen_factor) / dist;
 
-    // Nanite Cut 判定
-    if (error_px <= threshold_px && parent_error_px > threshold_px) {
+    // --- 仿 Nanite Cut ---
+    // 只有当当前节点够细，且父节点不够细时，才渲染它
+    // 增加 epsilon 防止 0 == 0 的模糊地带
+    if (error_px <= threshold_px && parent_error_px > (threshold_px + 0.0001)) {
         let slot = atomicAdd(&draw_args.instance_count, 1u);
         if (slot < arrayLength(&visible_clusters)) {
             visible_clusters[slot] = cluster_idx;

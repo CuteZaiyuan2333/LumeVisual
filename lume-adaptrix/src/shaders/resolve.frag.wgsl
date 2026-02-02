@@ -54,7 +54,7 @@ fn main(in: VertexOutput) -> @location(0) vec4<f32> {
     
     let id = vis_data.y;
     if (id == 0u) {
-        discard; // 明确丢弃背景，不执行后续逻辑
+        return vec4<f32>(1.0, 0.0, 1.0, 1.0); // 亮紫色诊断背景
     }
     
     let cluster_id = (id >> 10u) - 1u;
