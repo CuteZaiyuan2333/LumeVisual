@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use lume_adaptrix::{AdaptrixFlatAsset, processor::process_mesh};
+use lume_adaptrix::{AdaptrixFlatAsset, processor::process_mesh, AdaptrixAsset};
 use std::env;
 
 fn main() -> Result<()> {
@@ -14,11 +14,19 @@ fn main() -> Result<()> {
     let output_path = &args[2];
 
     println!("Processing {}...", input_path);
+    let start_total = std::time::Instant::now();
+    
     let (positions, normals, uvs, indices) = load_obj_flat(input_path)?;
+    println!("Model loaded and welded in {:.2}s", start_total.elapsed().as_secs_f32());
+    
+    let build_start = std::time::Instant::now();
     let adaptrix_asset = process_mesh(&positions, &normals, &uvs, &indices);
+    println!("Nanite Build complete in {:.2}s", build_start.elapsed().as_secs_f32());
 
+    let save_start = std::time::Instant::now();
     save_adaptrix_asset(&adaptrix_asset, output_path)?;
-    println!("Saved to {}", output_path);
+    println!("Saved to {} in {:.2}s", output_path, save_start.elapsed().as_secs_f32());
+    println!("Total execution time: {:.2}s", start_total.elapsed().as_secs_f32());
 
     Ok(())
 }
@@ -47,13 +55,9 @@ fn load_obj_flat(path: &str) -> Result<(Vec<f32>, Vec<f32>, Vec<f32>, Vec<u32>)>
         index_offset += (mesh.positions.len() / 3) as u32;
     }
 
-    println!("Welding {} vertices...", raw_positions.len() / 3);
-
     // 使用 meshopt 进行顶点焊接
     use meshopt::{generate_vertex_remap, remap_vertex_buffer, remap_index_buffer};
     
-    // 我们需要把 position, normal, uv 组合起来焊接
-    // 为了简单，我们只按位置焊接，或者构建一个统一的顶点结构
     #[repr(C)]
     #[derive(Clone, Copy, PartialEq, Default)]
     struct FullVertex {
@@ -75,9 +79,7 @@ fn load_obj_flat(path: &str) -> Result<(Vec<f32>, Vec<f32>, Vec<f32>, Vec<u32>)>
     let final_vertices = remap_vertex_buffer(&vertices, vertex_count, &remap);
     let final_indices = remap_index_buffer(Some(&raw_indices), vertex_count, &remap);
 
-    println!("Welding complete: {} -> {} vertices", vertices.len(), vertex_count);
-
-    // 增加：中心化和缩放逻辑
+    // 中心化和缩放逻辑
     let mut min_p = [f32::MAX; 3];
     let mut max_p = [f32::MIN; 3];
     for v in &final_vertices {
@@ -89,7 +91,7 @@ fn load_obj_flat(path: &str) -> Result<(Vec<f32>, Vec<f32>, Vec<f32>, Vec<u32>)>
     let center = [(min_p[0] + max_p[0]) / 2.0, (min_p[1] + max_p[1]) / 2.0, (min_p[2] + max_p[2]) / 2.0];
     let size = [max_p[0] - min_p[0], max_p[1] - min_p[1], max_p[2] - min_p[2]];
     let max_dim = size[0].max(size[1]).max(size[2]);
-    let scale = if max_dim > 0.0 { 2.0 / max_dim } else { 1.0 }; // 缩放到 2.0 单位大小
+    let scale = if max_dim > 0.0 { 2.0 / max_dim } else { 1.0 }; 
 
     let mut positions = Vec::with_capacity(vertex_count * 3);
     let mut normals = Vec::with_capacity(vertex_count * 3);
@@ -107,12 +109,5 @@ fn load_obj_flat(path: &str) -> Result<(Vec<f32>, Vec<f32>, Vec<f32>, Vec<u32>)>
 }
 
 fn save_adaptrix_asset(asset: &AdaptrixFlatAsset, path: &str) -> Result<()> {
-    use std::fs::File;
-    use std::io::BufWriter;
-
-    let file = File::create(path)?;
-    let writer = BufWriter::new(file);
-    bincode::serialize_into(writer, asset).context("Failed to serialize asset")?;
-
-    Ok(())
+    AdaptrixAsset::save_to_file(asset, path)
 }

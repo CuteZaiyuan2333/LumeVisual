@@ -7,8 +7,7 @@ use winit::{
 use lume_core::{Instance, InstanceDescriptor, Backend, Device, device::*};
 use lume_vulkan::VulkanInstance;
 use std::sync::Arc;
-use std::fs::File;
-use lume_adaptrix::{AdaptrixVertex, ClusterPacked};
+use lume_adaptrix::{AdaptrixVertex, ClusterPacked, AdaptrixAsset};
 use glam::{Mat4, Vec3, Vec4};
 
 struct AdaptrixApp {
@@ -18,10 +17,7 @@ struct AdaptrixApp {
     device: Option<lume_vulkan::VulkanDevice>,
     swapchain: Option<lume_vulkan::VulkanSwapchain>,
     
-    clusters: Vec<ClusterPacked>,
-    vertices: Vec<AdaptrixVertex>,
-    vertex_indices: Vec<u32>,
-    primitive_indices: Vec<u8>,
+    asset: Option<AdaptrixAsset>,
 
     cluster_buffer: Option<lume_vulkan::VulkanBuffer>,
     vertex_buffer: Option<lume_vulkan::VulkanBuffer>,
@@ -73,14 +69,18 @@ struct ViewUniform {
 
 impl AdaptrixApp {
     fn new() -> Self {
-        let path = if std::path::Path::new("猴头Atest.lad").exists() { "猴头Atest.lad" } else { "test.lad" };
-        println!("Loading: {}", path);
-        let asset: lume_adaptrix::AdaptrixFlatAsset = bincode::deserialize_from(File::open(path).unwrap()).unwrap();
-        println!("Loaded: {} clusters, {} vertices", asset.clusters.len(), asset.vertices.len());
+        let path = if std::path::Path::new("facade.lad").exists() { "facade.lad" } 
+                  else if std::path::Path::new("猴头Atest.lad").exists() { "猴头Atest.lad" } 
+                  else { "test.lad" };
+        println!("Mmap Loading: {}", path);
+        let start = std::time::Instant::now();
+        let asset = AdaptrixAsset::load_from_file(path).expect("Failed to mmap lad file");
+        println!("Mmap Loaded in {:.2}ms: {} clusters, {} vertices", 
+                 start.elapsed().as_secs_f32() * 1000.0, asset.clusters.len(), asset.vertices.len());
+        
         Self {
             window: None, instance: None, surface: None, device: None, swapchain: None,
-            clusters: asset.clusters, vertices: asset.vertices, 
-            vertex_indices: asset.meshlet_vertex_indices, primitive_indices: asset.meshlet_primitive_indices,
+            asset: Some(asset),
             cluster_buffer: None, vertex_buffer: None, vertex_index_buffer: None, primitive_index_buffer: None,
             visible_clusters_buffer: None, visible_count_buffer: None, zero_buffer: None, view_buffer: None,
             cull_pipeline: None, cull_layout: None, cull_bind_group_0: None, cull_bind_group_1: None,
@@ -95,17 +95,18 @@ impl AdaptrixApp {
     fn setup_gpu_resources(&mut self) {
         let device = self.device.as_ref().unwrap();
         let size = self.window.as_ref().unwrap().inner_size();
+        let asset = self.asset.as_ref().unwrap();
         
-        self.cluster_buffer = Some(device.create_buffer(BufferDescriptor { size: (self.clusters.len() * 48) as u64, usage: BufferUsage::STORAGE | BufferUsage::COPY_DST, mapped_at_creation: true }).unwrap());
-        self.cluster_buffer.as_ref().unwrap().write_data(0, bytemuck::cast_slice(&self.clusters)).unwrap();
-        self.vertex_buffer = Some(device.create_buffer(BufferDescriptor { size: (self.vertices.len() * 32) as u64, usage: BufferUsage::STORAGE | BufferUsage::COPY_DST, mapped_at_creation: true }).unwrap());
-        self.vertex_buffer.as_ref().unwrap().write_data(0, bytemuck::cast_slice(&self.vertices)).unwrap();
-        self.vertex_index_buffer = Some(device.create_buffer(BufferDescriptor { size: (self.vertex_indices.len() * 4) as u64, usage: BufferUsage::STORAGE | BufferUsage::COPY_DST, mapped_at_creation: true }).unwrap());
-        self.vertex_index_buffer.as_ref().unwrap().write_data(0, bytemuck::cast_slice(&self.vertex_indices)).unwrap();
-        self.primitive_index_buffer = Some(device.create_buffer(BufferDescriptor { size: self.primitive_indices.len() as u64, usage: BufferUsage::STORAGE | BufferUsage::COPY_DST, mapped_at_creation: true }).unwrap());
-        self.primitive_index_buffer.as_ref().unwrap().write_data(0, &self.primitive_indices).unwrap();
+        self.cluster_buffer = Some(device.create_buffer(BufferDescriptor { size: (asset.clusters.len() * 48) as u64, usage: BufferUsage::STORAGE | BufferUsage::COPY_DST, mapped_at_creation: true }).unwrap());
+        self.cluster_buffer.as_ref().unwrap().write_data(0, bytemuck::cast_slice(asset.clusters)).unwrap();
+        self.vertex_buffer = Some(device.create_buffer(BufferDescriptor { size: (asset.vertices.len() * 32) as u64, usage: BufferUsage::STORAGE | BufferUsage::COPY_DST, mapped_at_creation: true }).unwrap());
+        self.vertex_buffer.as_ref().unwrap().write_data(0, bytemuck::cast_slice(asset.vertices)).unwrap();
+        self.vertex_index_buffer = Some(device.create_buffer(BufferDescriptor { size: (asset.meshlet_vertex_indices.len() * 4) as u64, usage: BufferUsage::STORAGE | BufferUsage::COPY_DST, mapped_at_creation: true }).unwrap());
+        self.vertex_index_buffer.as_ref().unwrap().write_data(0, bytemuck::cast_slice(asset.meshlet_vertex_indices)).unwrap();
+        self.primitive_index_buffer = Some(device.create_buffer(BufferDescriptor { size: asset.meshlet_primitive_indices.len() as u64, usage: BufferUsage::STORAGE | BufferUsage::COPY_DST, mapped_at_creation: true }).unwrap());
+        self.primitive_index_buffer.as_ref().unwrap().write_data(0, asset.meshlet_primitive_indices).unwrap();
         
-        self.visible_clusters_buffer = Some(device.create_buffer(BufferDescriptor { size: (self.clusters.len() * 8).max(2048 * 1024) as u64, usage: BufferUsage::STORAGE, mapped_at_creation: true }).unwrap());
+        self.visible_clusters_buffer = Some(device.create_buffer(BufferDescriptor { size: (asset.clusters.len() * 8).max(2048 * 1024) as u64, usage: BufferUsage::STORAGE, mapped_at_creation: true }).unwrap());
         self.visible_count_buffer = Some(device.create_buffer(BufferDescriptor { size: 16, usage: BufferUsage::STORAGE | BufferUsage::COPY_DST | BufferUsage::COPY_SRC | BufferUsage::INDIRECT, mapped_at_creation: true }).unwrap());
         self.visible_count_buffer.as_ref().unwrap().write_data(0, bytemuck::cast_slice(&[372u32, 0, 0, 0])).unwrap();
         
@@ -124,7 +125,7 @@ impl AdaptrixApp {
         let res_v_mod = device.create_shader_module(&lume_core::shader::compile_shader(lume_core::shader::ShaderSource::Wgsl(include_str!("../../../lume-adaptrix/src/shaders/resolve.vert.wgsl"))).unwrap()).unwrap();
         let res_f_mod = device.create_shader_module(&lume_core::shader::compile_shader(lume_core::shader::ShaderSource::Wgsl(include_str!("../../../lume-adaptrix/src/shaders/resolve.frag.wgsl"))).unwrap()).unwrap();
 
-        // Cull Layout
+        // Cull
         let bgl_c0 = device.create_bind_group_layout(BindGroupLayoutDescriptor { entries: vec![
             BindGroupLayoutEntry { binding: 0, visibility: ShaderStage::COMPUTE, ty: BindingType::StorageBuffer },
             BindGroupLayoutEntry { binding: 1, visibility: ShaderStage::COMPUTE, ty: BindingType::StorageBuffer },
@@ -141,7 +142,7 @@ impl AdaptrixApp {
         self.cull_bind_group_1 = Some(device.create_bind_group(BindGroupDescriptor { layout: &bgl_c1, entries: vec![BindGroupEntry { binding: 0, resource: BindingResource::Buffer(self.view_buffer.as_ref().unwrap()) }] }).unwrap());
         self.cull_layout = Some(l_cull);
 
-        // Vis Pipeline: 仿 Nanite 关闭背面剔除
+        // Vis
         let vis_rp = device.create_render_pass(RenderPassDescriptor { color_format: TextureFormat::Rg32Uint, depth_stencil_format: Some(TextureFormat::Depth32Float) }).unwrap();
         let bgl_v0 = device.create_bind_group_layout(BindGroupLayoutDescriptor { entries: vec![
             BindGroupLayoutEntry { binding: 0, visibility: ShaderStage::VERTEX, ty: BindingType::StorageBuffer },
@@ -153,16 +154,7 @@ impl AdaptrixApp {
         ] }).unwrap();
         let bgl_v1 = device.create_bind_group_layout(BindGroupLayoutDescriptor { entries: vec![BindGroupLayoutEntry { binding: 0, visibility: ShaderStage::VERTEX, ty: BindingType::UniformBuffer }] }).unwrap();
         let l_vis = device.create_pipeline_layout(PipelineLayoutDescriptor { bind_group_layouts: &[&bgl_v0, &bgl_v1] }).unwrap();
-        self.vis_pipeline = Some(device.create_graphics_pipeline(GraphicsPipelineDescriptor { 
-            vertex_shader: &vis_v_mod, 
-            fragment_shader: &vis_f_mod, 
-            render_pass: &vis_rp, 
-            layout: &l_vis, 
-            primitive: PrimitiveState { topology: PrimitiveTopology::TriangleList, cull_mode: CullMode::None }, // 关闭裁剪
-            vertex_layout: None, 
-            depth_stencil: Some(DepthStencilState { format: TextureFormat::Depth32Float, depth_write_enabled: true, depth_compare: CompareFunction::LessEqual }) 
-        }).unwrap());
-        
+        self.vis_pipeline = Some(device.create_graphics_pipeline(GraphicsPipelineDescriptor { vertex_shader: &vis_v_mod, fragment_shader: &vis_f_mod, render_pass: &vis_rp, layout: &l_vis, primitive: PrimitiveState { topology: PrimitiveTopology::TriangleList, cull_mode: CullMode::None }, vertex_layout: None, depth_stencil: Some(DepthStencilState { format: TextureFormat::Depth32Float, depth_write_enabled: true, depth_compare: CompareFunction::LessEqual }) }).unwrap());
         self.vis_bind_group_0 = Some(device.create_bind_group(BindGroupDescriptor { layout: &bgl_v0, entries: vec![
             BindGroupEntry { binding: 0, resource: BindingResource::Buffer(self.cluster_buffer.as_ref().unwrap()) },
             BindGroupEntry { binding: 1, resource: BindingResource::Buffer(self.vertex_buffer.as_ref().unwrap()) },
@@ -176,7 +168,7 @@ impl AdaptrixApp {
         self.vis_render_pass = Some(vis_rp);
         self.vis_layout = Some(l_vis);
 
-        // Resolve Pipeline
+        // Resolve
         let res_rp = device.create_render_pass(RenderPassDescriptor { color_format: TextureFormat::Bgra8UnormSrgb, depth_stencil_format: None }).unwrap();
         for i in 0..3 { self.resolve_framebuffers.push(device.create_framebuffer(FramebufferDescriptor { render_pass: &res_rp, attachments: &[self.swapchain.as_ref().unwrap().get_view(i as u32)], width: size.width, height: size.height }).unwrap()); }
         let bgl_r0 = device.create_bind_group_layout(BindGroupLayoutDescriptor { entries: vec![
@@ -187,16 +179,7 @@ impl AdaptrixApp {
         ] }).unwrap();
         let bgl_r1 = device.create_bind_group_layout(BindGroupLayoutDescriptor { entries: vec![BindGroupLayoutEntry { binding: 0, visibility: ShaderStage::FRAGMENT, ty: BindingType::UniformBuffer }, BindGroupLayoutEntry { binding: 1, visibility: ShaderStage::FRAGMENT, ty: BindingType::SampledTexture }] }).unwrap();
         let l_res = device.create_pipeline_layout(PipelineLayoutDescriptor { bind_group_layouts: &[&bgl_r0, &bgl_r1] }).unwrap();
-        self.resolve_pipeline = Some(device.create_graphics_pipeline(GraphicsPipelineDescriptor { 
-            vertex_shader: &res_v_mod, 
-            fragment_shader: &res_f_mod, 
-            render_pass: &res_rp, 
-            layout: &l_res, 
-            primitive: PrimitiveState { topology: PrimitiveTopology::TriangleList, cull_mode: CullMode::None }, 
-            vertex_layout: None, 
-            depth_stencil: None 
-        }).unwrap());
-        
+        self.resolve_pipeline = Some(device.create_graphics_pipeline(GraphicsPipelineDescriptor { vertex_shader: &res_v_mod, fragment_shader: &res_f_mod, render_pass: &res_rp, layout: &l_res, primitive: PrimitiveState { topology: PrimitiveTopology::TriangleList, cull_mode: CullMode::None }, vertex_layout: None, depth_stencil: None }).unwrap());
         self.resolve_bind_group_0 = Some(device.create_bind_group(BindGroupDescriptor { layout: &bgl_r0, entries: vec![
             BindGroupEntry { binding: 0, resource: BindingResource::Buffer(self.cluster_buffer.as_ref().unwrap()) },
             BindGroupEntry { binding: 1, resource: BindingResource::Buffer(self.vertex_buffer.as_ref().unwrap()) },
@@ -215,7 +198,7 @@ impl AdaptrixApp {
 impl ApplicationHandler for AdaptrixApp {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if self.window.is_none() {
-            let window = Arc::new(event_loop.create_window(Window::default_attributes().with_title("LumeVisual - Nanite CullMode Fix").with_inner_size(winit::dpi::LogicalSize::new(1280.0, 720.0))).unwrap());
+            let window = Arc::new(event_loop.create_window(Window::default_attributes().with_title("LumeVisual - Nanite Master Load").with_inner_size(winit::dpi::LogicalSize::new(1280.0, 720.0))).unwrap());
             let instance = VulkanInstance::new(InstanceDescriptor { name: "Nanite", backend: Backend::Vulkan }).unwrap();
             let surface = instance.create_surface(&window, &window).unwrap();
             let device = instance.request_device(Some(&surface)).unwrap();
@@ -238,30 +221,27 @@ impl ApplicationHandler for AdaptrixApp {
                     let vp = proj * view_mat;
                     let inv_vp = vp.inverse();
                     
-                    let view_proj_cols = [vp.col(0), vp.col(1), vp.col(2), vp.col(3)];
-                    let inv_view_proj_cols = [inv_vp.col(0), inv_vp.col(1), inv_vp.col(2), inv_vp.col(3)];
-
                     self.view_buffer.as_ref().unwrap().write_data(0, bytemuck::bytes_of(&ViewUniform {
-                        view_proj: view_proj_cols,
-                        inv_view_proj: inv_view_proj_cols,
-                        camera_pos_and_threshold: glam::vec4(cam_pos.x, cam_pos.y, cam_pos.z, 1.5), // 1.5 像素误差
+                        view_proj: [vp.col(0), vp.col(1), vp.col(2), vp.col(3)],
+                        inv_view_proj: [inv_vp.col(0), inv_vp.col(1), inv_vp.col(2), inv_vp.col(3)],
+                        camera_pos_and_threshold: glam::vec4(cam_pos.x, cam_pos.y, cam_pos.z, 1.5), 
                         viewport_size: glam::vec4(1280.0, 720.0, 0.0, 0.0),
                     })).unwrap();
 
-                    let cmd = self.command_buffer.as_mut().unwrap();
-                    cmd.reset().unwrap(); cmd.begin().unwrap();
-                    
                     // 偶尔读取一下 GPU 计数用于调试
                     static mut FRAME_COUNT: u32 = 0;
                     unsafe {
                         FRAME_COUNT += 1;
                         if FRAME_COUNT % 100 == 0 {
-                            let _ = device.wait_idle(); // 强制同步
+                            let _ = device.wait_idle(); 
                             let mut counts = [0u32; 4];
                             let _ = self.visible_count_buffer.as_ref().unwrap().read_data(0, bytemuck::cast_slice_mut(&mut counts));
                             println!("Visible clusters: {}", counts[1]); 
                         }
                     }
+
+                    let cmd = self.command_buffer.as_mut().unwrap();
+                    cmd.reset().unwrap(); cmd.begin().unwrap();
                     
                     cmd.copy_buffer_to_buffer_offset(self.zero_buffer.as_ref().unwrap(), 0, self.visible_count_buffer.as_ref().unwrap(), 4, 4);
                     cmd.compute_barrier();
@@ -269,7 +249,7 @@ impl ApplicationHandler for AdaptrixApp {
                     cmd.bind_compute_pipeline(self.cull_pipeline.as_ref().unwrap());
                     cmd.bind_bind_group(0, self.cull_bind_group_0.as_ref().unwrap());
                     cmd.bind_bind_group(1, self.cull_bind_group_1.as_ref().unwrap());
-                    cmd.dispatch((self.clusters.len() as u32 + 63) / 64, 1, 1);
+                    cmd.dispatch((self.asset.as_ref().unwrap().clusters.len() as u32 + 63) / 64, 1, 1);
                     cmd.compute_barrier();
 
                     cmd.texture_barrier(self.vis_buffer_view.as_ref().unwrap(), ImageLayout::Undefined, ImageLayout::ColorAttachment);
@@ -278,13 +258,11 @@ impl ApplicationHandler for AdaptrixApp {
                     cmd.bind_graphics_pipeline(self.vis_pipeline.as_ref().unwrap());
                     cmd.bind_bind_group(0, self.vis_bind_group_0.as_ref().unwrap());
                     cmd.bind_bind_group(1, self.vis_bind_group_1.as_ref().unwrap());
-                    
-                    // 核心修复：使用 DrawIndirect，由 GPU 决定绘制多少
                     cmd.draw_indirect(self.visible_count_buffer.as_ref().unwrap(), 0, 1, 16);
                     cmd.end_render_pass();
 
                     cmd.texture_barrier(self.vis_buffer_view.as_ref().unwrap(), ImageLayout::ColorAttachment, ImageLayout::ShaderReadOnly);
-                    cmd.begin_render_pass(self.resolve_render_pass.as_ref().unwrap(), &self.resolve_framebuffers[token.image_index as usize], [0.05, 0.05, 0.07, 1.0]);
+                    cmd.begin_render_pass(self.resolve_render_pass.as_ref().unwrap(), &self.resolve_framebuffers[token.image_index as usize], [0.02, 0.02, 0.03, 1.0]);
                     cmd.bind_graphics_pipeline(self.resolve_pipeline.as_ref().unwrap());
                     cmd.bind_bind_group(0, self.resolve_bind_group_0.as_ref().unwrap());
                     cmd.bind_bind_group(1, self.resolve_bind_group_1.as_ref().unwrap());
