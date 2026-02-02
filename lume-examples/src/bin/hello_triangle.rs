@@ -87,22 +87,19 @@ impl ApplicationHandler for App {
 
             staging_buffer.write_data(0, pixels).expect("Failed to write to staging buffer");
 
+            let texture_view = device.create_texture_view(&texture, TextureViewDescriptor {
+                format: Some(TextureFormat::Rgba8Unorm),
+            }).expect("Failed to create texture view");
+
             // Upload texture
             let command_pool = device.create_command_pool().expect("Failed to create command pool");
             let mut upload_cmd = command_pool.allocate_command_buffer().expect("Failed to allocate upload cmd");
             
             upload_cmd.begin().expect("Failed to begin upload cmd");
-            upload_cmd.texture_barrier(&texture, ImageLayout::Undefined, ImageLayout::TransferDst);
+            upload_cmd.texture_barrier(&texture_view, ImageLayout::Undefined, ImageLayout::TransferDst);
             upload_cmd.copy_buffer_to_texture(&staging_buffer, &texture, width, height);
-            upload_cmd.texture_barrier(&texture, ImageLayout::TransferDst, ImageLayout::ShaderReadOnly);
+            upload_cmd.texture_barrier(&texture_view, ImageLayout::TransferDst, ImageLayout::ShaderReadOnly);
             upload_cmd.end().expect("Failed to end upload cmd");
-
-            device.submit(&[&upload_cmd], &[], &[], None).expect("Failed to submit texture upload");
-            device.wait_idle().expect("Wait idle failed");
-
-            let texture_view = device.create_texture_view(&texture, TextureViewDescriptor {
-                format: Some(TextureFormat::Rgba8Unorm),
-            }).expect("Failed to create texture view");
 
             let sampler = device.create_sampler(SamplerDescriptor {
                 min_filter: FilterMode::Linear,

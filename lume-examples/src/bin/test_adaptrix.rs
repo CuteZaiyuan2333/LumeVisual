@@ -9,7 +9,7 @@ use lume_vulkan::VulkanInstance;
 use std::sync::Arc;
 use std::fs::File;
 use std::io::Read;
-use lume_adaptrix::{AdaptrixVertex, Cluster};
+use lume_adaptrix::{AdaptrixVertex, ClusterPacked};
 use bytemuck::{self, Zeroable};
 use glam::{Mat4, Vec4, Vec3};
 
@@ -19,7 +19,7 @@ struct AdaptrixApp {
     surface: Option<lume_vulkan::VulkanSurface>,
     device: Option<lume_vulkan::VulkanDevice>,
     swapchain: Option<lume_vulkan::VulkanSwapchain>,
-    clusters: Vec<Cluster>,
+    clusters: Vec<ClusterPacked>,
     vertices: Vec<AdaptrixVertex>,
     indices: Vec<u32>,
     cluster_buffer: Option<lume_vulkan::VulkanBuffer>,
@@ -74,7 +74,7 @@ impl AdaptrixApp {
         let cluster_count = u32::from_le_bytes(counts[0..4].try_into().unwrap());
         let vertex_count = u32::from_le_bytes(counts[4..8].try_into().unwrap());
         let index_count = u32::from_le_bytes(counts[8..12].try_into().unwrap());
-        let mut clusters = vec![Cluster::zeroed(); cluster_count as usize]; file.read_exact(bytemuck::cast_slice_mut(&mut clusters)).unwrap();
+        let mut clusters = vec![ClusterPacked::zeroed(); cluster_count as usize]; file.read_exact(bytemuck::cast_slice_mut(&mut clusters)).unwrap();
         let mut vertices = vec![AdaptrixVertex::zeroed(); vertex_count as usize]; file.read_exact(bytemuck::cast_slice_mut(&mut vertices)).unwrap();
         let mut indices = vec![0u32; index_count as usize]; file.read_exact(bytemuck::cast_slice_mut(&mut indices)).unwrap();
         Self {
@@ -181,22 +181,34 @@ impl ApplicationHandler for AdaptrixApp {
                     let view_proj = proj_mat * view_mat;
                     
                     self.view_buffer.as_ref().unwrap().write_data(0, bytemuck::cast_slice(&[ViewUniform { view_proj, inv_view_proj: view_proj.inverse(), frustum: [Vec4::ZERO; 6], viewport_size: [1280.0, 720.0], error_threshold: 1.0, _padding: 0.0 }])).unwrap();
-                    self.visible_count_buffer.as_ref().unwrap().write_data(0, &[0u8; 4]).unwrap();
+                    
+                    // 重置 Draw Args (instanceCount 设为 0)
+                    // draw_args 结构: [vertexCount, instanceCount, firstVertex, firstInstance]
+                    let initial_args: [u32; 4] = [124 * 3, 0, 0, 0];
+                    self.visible_count_buffer.as_ref().unwrap().write_data(0, bytemuck::cast_slice(&initial_args)).unwrap();
+
                     let cmd = self.command_buffer.as_mut().unwrap();
                     cmd.reset().unwrap(); cmd.begin().unwrap();
                     
-                    // 暂时禁用 Compute Culling 的录制，以防它干扰可见性列表
-                    // cmd.bind_compute_pipeline(self.cull_pipeline.as_ref().unwrap());
-                    // ... 
-                    
-                    // Pass 1: VisBuffer (渲染所有集群)
+                    // --- Pass 0: Nanite DAG Traversal (Compute) ---
+                    cmd.bind_compute_pipeline(self.cull_pipeline.as_ref().unwrap());
+                    cmd.bind_bind_group(0, self.cull_bind_group_0.as_ref().unwrap());
+                    cmd.bind_bind_group(1, self.cull_bind_group_1.as_ref().unwrap());
+                    let group_count = (self.clusters.len() as u32 + 63) / 64;
+                    cmd.dispatch(group_count, 1, 1);
+                    cmd.compute_barrier();
+
+                    // Pass 1: VisBuffer (渲染被选中的集群)
                     cmd.begin_render_pass(self.vis_render_pass.as_ref().unwrap(), self.vis_framebuffer.as_ref().unwrap(), [0.0, 0.0, 0.0, 0.0]);
                     cmd.set_viewport(0.0, 0.0, 1280.0, 720.0); cmd.set_scissor(0, 0, 1280, 720);
                     cmd.bind_graphics_pipeline(self.vis_pipeline.as_ref().unwrap());
                     cmd.bind_bind_group(0, self.vis_bind_group_0.as_ref().unwrap());
                     cmd.bind_bind_group(1, self.vis_bind_group_1.as_ref().unwrap());
-                    // 强制渲染所有集群
-                    cmd.draw(128 * 3, self.clusters.len() as u32, 0, 0); 
+                    
+                    // 这里我们暂时还是手动调用 draw，但 instance_count 会被 VisibleClusters 缓冲区影响
+                    // 如果你的底层支持 draw_indirect，请通知我替换。
+                    // 目前我们根据 self.clusters.len() 绘制，在 shader 里根据可见性 buffer 处理
+                    cmd.draw(124 * 3, self.clusters.len() as u32, 0, 0); 
                     cmd.end_render_pass();
 
                     // Pass 2: Resolve

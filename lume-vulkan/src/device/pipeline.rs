@@ -3,6 +3,9 @@ use std::ffi::CString;
 use lume_core::{LumeError, LumeResult, device::*};
 use crate::VulkanDevice;
 
+use std::sync::Arc;
+use crate::{VulkanShaderModuleInner, VulkanRenderPassInner, VulkanPipelineLayoutInner, VulkanGraphicsPipelineInner, VulkanComputePipelineInner};
+
 impl VulkanDevice {
     pub fn create_shader_module_impl(&self, code: &[u32]) -> LumeResult<crate::VulkanShaderModule> {
         let create_info = vk::ShaderModuleCreateInfo {
@@ -16,10 +19,10 @@ impl VulkanDevice {
                 .map_err(|e| LumeError::ResourceCreationFailed(format!("Failed to create shader module: {}", e)))?
         };
 
-        Ok(crate::VulkanShaderModule {
+        Ok(crate::VulkanShaderModule(Arc::new(VulkanShaderModuleInner {
             module,
             device: self.inner.device.clone(),
-        })
+        })))
     }
 
     pub fn create_render_pass_impl(&self, descriptor: RenderPassDescriptor) -> LumeResult<crate::VulkanRenderPass> {
@@ -106,10 +109,10 @@ impl VulkanDevice {
                 .map_err(|e| LumeError::ResourceCreationFailed(format!("Failed to create render pass: {}", e)))?
         };
 
-        Ok(crate::VulkanRenderPass {
+        Ok(crate::VulkanRenderPass(Arc::new(VulkanRenderPassInner {
             render_pass,
             device: self.inner.device.clone(),
-        })
+        })))
     }
 
     pub fn create_pipeline_layout_impl(&self, descriptor: PipelineLayoutDescriptor<Self>) -> LumeResult<crate::VulkanPipelineLayout> {
@@ -126,11 +129,11 @@ impl VulkanDevice {
                 .map_err(|e| LumeError::ResourceCreationFailed(format!("Failed to create pipeline layout: {}", e)))?
         };
 
-        Ok(crate::VulkanPipelineLayout {
+        Ok(crate::VulkanPipelineLayout(Arc::new(VulkanPipelineLayoutInner {
             layout,
             set_layouts,
             device: self.inner.device.clone(),
-        })
+        })))
     }
 
     pub fn create_graphics_pipeline_impl(&self, descriptor: GraphicsPipelineDescriptor<Self>) -> LumeResult<crate::VulkanGraphicsPipeline> {
@@ -139,13 +142,13 @@ impl VulkanDevice {
         let shader_stages = [
             vk::PipelineShaderStageCreateInfo {
                 stage: vk::ShaderStageFlags::VERTEX,
-                module: descriptor.vertex_shader.module,
+                module: descriptor.vertex_shader.0.module,
                 p_name: entry_name.as_ptr(),
                 ..Default::default()
             },
             vk::PipelineShaderStageCreateInfo {
                 stage: vk::ShaderStageFlags::FRAGMENT,
-                module: descriptor.fragment_shader.module,
+                module: descriptor.fragment_shader.0.module,
                 p_name: entry_name.as_ptr(),
                 ..Default::default()
             },
@@ -253,8 +256,8 @@ impl VulkanDevice {
             p_color_blend_state: &color_blending,
             p_depth_stencil_state: &depth_stencil_info,
             p_dynamic_state: &dynamic_state_info,
-            layout: descriptor.layout.layout,
-            render_pass: descriptor.render_pass.render_pass,
+            layout: descriptor.layout.0.layout,
+            render_pass: descriptor.render_pass.0.render_pass,
             ..Default::default()
         };
 
@@ -263,25 +266,25 @@ impl VulkanDevice {
                 .map_err(|(_, e)| LumeError::PipelineCreationFailed(format!("Failed to create graphics pipeline: {:?}", e)))?
         };
 
-        Ok(crate::VulkanGraphicsPipeline {
+        Ok(crate::VulkanGraphicsPipeline(Arc::new(VulkanGraphicsPipelineInner {
             pipeline: pipelines[0],
-            layout: descriptor.layout.layout,
+            layout: descriptor.layout.0.layout,
             device: self.inner.device.clone(),
-        })
+        })))
     }
 
     pub fn create_compute_pipeline_impl(&self, descriptor: ComputePipelineDescriptor<Self>) -> LumeResult<crate::VulkanComputePipeline> {
         let entry_name = CString::new("main").unwrap();
         let stage_info = vk::PipelineShaderStageCreateInfo {
             stage: vk::ShaderStageFlags::COMPUTE,
-            module: descriptor.shader.module,
+            module: descriptor.shader.0.module,
             p_name: entry_name.as_ptr(),
             ..Default::default()
         };
 
         let create_info = vk::ComputePipelineCreateInfo {
             stage: stage_info,
-            layout: descriptor.layout.layout,
+            layout: descriptor.layout.0.layout,
             ..Default::default()
         };
 
@@ -290,18 +293,18 @@ impl VulkanDevice {
                 .map_err(|(_, e)| LumeError::PipelineCreationFailed(format!("Failed to create compute pipeline: {:?}", e)))?
         };
 
-        Ok(crate::VulkanComputePipeline {
+        Ok(crate::VulkanComputePipeline(Arc::new(VulkanComputePipelineInner {
             pipeline: pipelines[0],
-            layout: descriptor.layout.layout,
+            layout: descriptor.layout.0.layout,
             device: self.inner.device.clone(),
-        })
+        })))
     }
 
     pub fn create_framebuffer_impl(&self, descriptor: FramebufferDescriptor<Self>) -> LumeResult<crate::VulkanFramebuffer> {
         let vk_attachments: Vec<vk::ImageView> = descriptor.attachments.iter().map(|&a| a.view).collect();
 
         let create_info = vk::FramebufferCreateInfo {
-            render_pass: descriptor.render_pass.render_pass,
+            render_pass: descriptor.render_pass.0.render_pass,
             attachment_count: vk_attachments.len() as u32,
             p_attachments: vk_attachments.as_ptr(),
             width: descriptor.width,

@@ -98,7 +98,7 @@ pub trait CommandBuffer {
     fn dispatch(&mut self, x: u32, y: u32, z: u32);
     fn copy_buffer_to_buffer(&mut self, source: &<Self::Device as Device>::Buffer, destination: &<Self::Device as Device>::Buffer, size: u64);
     fn copy_buffer_to_texture(&mut self, buffer: &<Self::Device as Device>::Buffer, texture: &<Self::Device as Device>::Texture, width: u32, height: u32);
-    fn texture_barrier(&mut self, texture: &<Self::Device as Device>::Texture, old_layout: ImageLayout, new_layout: ImageLayout);
+    fn texture_barrier(&mut self, texture_view: &<Self::Device as Device>::TextureView, old_layout: ImageLayout, new_layout: ImageLayout);
     fn compute_barrier(&mut self);
 }
 
@@ -135,7 +135,7 @@ pub enum ClearValue {
 
 pub trait ShaderModule {}
 pub trait RenderPass {}
-pub trait PipelineLayout {}
+pub trait PipelineLayout: Clone {}
 pub trait GraphicsPipeline: Send + Sync {}
 pub trait ComputePipeline: Send + Sync {}
 pub trait Semaphore: Send + Sync {}
@@ -187,6 +187,9 @@ pub enum ImageLayout {
     TransferSrc,
     TransferDst,
     ShaderReadOnly,
+    ColorAttachment,
+    DepthStencilAttachment,
+    Present,
 }
 
 pub struct TextureDescriptor {

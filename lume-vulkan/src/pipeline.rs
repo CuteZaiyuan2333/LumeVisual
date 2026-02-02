@@ -1,12 +1,14 @@
 use ash::vk;
 use lume_core::{LumeError, LumeResult};
 
-pub struct VulkanShaderModule {
+use std::sync::Arc;
+
+pub struct VulkanShaderModuleInner {
     pub module: vk::ShaderModule,
     pub device: ash::Device,
 }
 
-impl Drop for VulkanShaderModule {
+impl Drop for VulkanShaderModuleInner {
     fn drop(&mut self) {
         unsafe {
             self.device.destroy_shader_module(self.module, None);
@@ -14,12 +16,15 @@ impl Drop for VulkanShaderModule {
     }
 }
 
-pub struct VulkanRenderPass {
+#[derive(Clone)]
+pub struct VulkanShaderModule(pub Arc<VulkanShaderModuleInner>);
+
+pub struct VulkanRenderPassInner {
     pub render_pass: vk::RenderPass,
     pub device: ash::Device,
 }
 
-impl Drop for VulkanRenderPass {
+impl Drop for VulkanRenderPassInner {
     fn drop(&mut self) {
         unsafe {
             self.device.destroy_render_pass(self.render_pass, None);
@@ -27,13 +32,16 @@ impl Drop for VulkanRenderPass {
     }
 }
 
-pub struct VulkanPipelineLayout {
+#[derive(Clone)]
+pub struct VulkanRenderPass(pub Arc<VulkanRenderPassInner>);
+
+pub struct VulkanPipelineLayoutInner {
     pub layout: vk::PipelineLayout,
     pub set_layouts: Vec<vk::DescriptorSetLayout>,
     pub device: ash::Device,
 }
 
-impl Drop for VulkanPipelineLayout {
+impl Drop for VulkanPipelineLayoutInner {
     fn drop(&mut self) {
         unsafe {
             self.device.destroy_pipeline_layout(self.layout, None);
@@ -41,13 +49,16 @@ impl Drop for VulkanPipelineLayout {
     }
 }
 
-pub struct VulkanGraphicsPipeline {
+#[derive(Clone)]
+pub struct VulkanPipelineLayout(pub Arc<VulkanPipelineLayoutInner>);
+
+pub struct VulkanGraphicsPipelineInner {
     pub pipeline: vk::Pipeline,
     pub layout: vk::PipelineLayout,
     pub device: ash::Device,
 }
 
-impl Drop for VulkanGraphicsPipeline {
+impl Drop for VulkanGraphicsPipelineInner {
     fn drop(&mut self) {
         unsafe {
             self.device.destroy_pipeline(self.pipeline, None);
@@ -55,19 +66,25 @@ impl Drop for VulkanGraphicsPipeline {
     }
 }
 
-pub struct VulkanComputePipeline {
+#[derive(Clone)]
+pub struct VulkanGraphicsPipeline(pub Arc<VulkanGraphicsPipelineInner>);
+
+pub struct VulkanComputePipelineInner {
     pub pipeline: vk::Pipeline,
     pub layout: vk::PipelineLayout,
     pub device: ash::Device,
 }
 
-impl Drop for VulkanComputePipeline {
+impl Drop for VulkanComputePipelineInner {
     fn drop(&mut self) {
         unsafe {
             self.device.destroy_pipeline(self.pipeline, None);
         }
     }
 }
+
+#[derive(Clone)]
+pub struct VulkanComputePipeline(pub Arc<VulkanComputePipelineInner>);
 
 pub struct VulkanCommandPool {
     pub pool: vk::CommandPool,
@@ -203,7 +220,7 @@ impl lume_core::device::CommandBuffer for VulkanCommandBuffer {
         ];
 
         let render_pass_begin_info = vk::RenderPassBeginInfo {
-            render_pass: render_pass.render_pass,
+            render_pass: render_pass.0.render_pass,
             framebuffer: framebuffer.framebuffer,
             render_area: vk::Rect2D {
                 offset: vk::Offset2D { x: 0, y: 0 },
@@ -346,15 +363,15 @@ impl lume_core::device::CommandBuffer for VulkanCommandBuffer {
 
     fn bind_graphics_pipeline(&mut self, pipeline: &<Self::Device as lume_core::Device>::GraphicsPipeline) {
         unsafe {
-            self.device.cmd_bind_pipeline(self.buffer, vk::PipelineBindPoint::GRAPHICS, pipeline.pipeline);
-            self.current_pipeline_layout = pipeline.layout;
+            self.device.cmd_bind_pipeline(self.buffer, vk::PipelineBindPoint::GRAPHICS, pipeline.0.pipeline);
+            self.current_pipeline_layout = pipeline.0.layout;
         }
     }
 
     fn bind_compute_pipeline(&mut self, pipeline: &crate::VulkanComputePipeline) {
         unsafe {
-            self.device.cmd_bind_pipeline(self.buffer, vk::PipelineBindPoint::COMPUTE, pipeline.pipeline);
-            self.current_pipeline_layout = pipeline.layout;
+            self.device.cmd_bind_pipeline(self.buffer, vk::PipelineBindPoint::COMPUTE, pipeline.0.pipeline);
+            self.current_pipeline_layout = pipeline.0.layout;
         }
     }
 
@@ -456,15 +473,19 @@ impl lume_core::device::CommandBuffer for VulkanCommandBuffer {
         }
     }
 
-    fn texture_barrier(&mut self, texture: &crate::VulkanTexture, old_layout: lume_core::device::ImageLayout, new_layout: lume_core::device::ImageLayout) {
+    fn texture_barrier(&mut self, texture_view: &crate::VulkanTextureView, old_layout: lume_core::device::ImageLayout, new_layout: lume_core::device::ImageLayout) {
         let barrier = vk::ImageMemoryBarrier {
             old_layout: map_layout(old_layout),
             new_layout: map_layout(new_layout),
             src_queue_family_index: vk::QUEUE_FAMILY_IGNORED,
             dst_queue_family_index: vk::QUEUE_FAMILY_IGNORED,
-            image: texture.image,
+            image: texture_view.image,
             subresource_range: vk::ImageSubresourceRange {
-                aspect_mask: vk::ImageAspectFlags::COLOR,
+                aspect_mask: if new_layout == lume_core::device::ImageLayout::DepthStencilAttachment {
+                    vk::ImageAspectFlags::DEPTH
+                } else {
+                    vk::ImageAspectFlags::COLOR
+                },
                 base_mip_level: 0,
                 level_count: 1,
                 base_array_layer: 0,
@@ -473,11 +494,16 @@ impl lume_core::device::CommandBuffer for VulkanCommandBuffer {
             src_access_mask: match old_layout {
                 lume_core::device::ImageLayout::Undefined => vk::AccessFlags::empty(),
                 lume_core::device::ImageLayout::TransferDst => vk::AccessFlags::TRANSFER_WRITE,
-                _ => vk::AccessFlags::MEMORY_READ, // Simplified
+                lume_core::device::ImageLayout::ColorAttachment => vk::AccessFlags::COLOR_ATTACHMENT_WRITE,
+                lume_core::device::ImageLayout::DepthStencilAttachment => vk::AccessFlags::DEPTH_STENCIL_ATTACHMENT_WRITE,
+                _ => vk::AccessFlags::MEMORY_READ, 
             },
             dst_access_mask: match new_layout {
                 lume_core::device::ImageLayout::TransferDst => vk::AccessFlags::TRANSFER_WRITE,
                 lume_core::device::ImageLayout::ShaderReadOnly => vk::AccessFlags::SHADER_READ,
+                lume_core::device::ImageLayout::ColorAttachment => vk::AccessFlags::COLOR_ATTACHMENT_WRITE,
+                lume_core::device::ImageLayout::DepthStencilAttachment => vk::AccessFlags::DEPTH_STENCIL_ATTACHMENT_WRITE,
+                lume_core::device::ImageLayout::Present => vk::AccessFlags::empty(),
                 _ => vk::AccessFlags::MEMORY_READ | vk::AccessFlags::MEMORY_WRITE,
             },
             ..Default::default()
@@ -486,12 +512,17 @@ impl lume_core::device::CommandBuffer for VulkanCommandBuffer {
         let src_stage = match old_layout {
             lume_core::device::ImageLayout::Undefined => vk::PipelineStageFlags::TOP_OF_PIPE,
             lume_core::device::ImageLayout::TransferDst => vk::PipelineStageFlags::TRANSFER,
+            lume_core::device::ImageLayout::ColorAttachment => vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
+            lume_core::device::ImageLayout::DepthStencilAttachment => vk::PipelineStageFlags::EARLY_FRAGMENT_TESTS | vk::PipelineStageFlags::LATE_FRAGMENT_TESTS,
             _ => vk::PipelineStageFlags::ALL_COMMANDS,
         };
 
         let dst_stage = match new_layout {
             lume_core::device::ImageLayout::TransferDst => vk::PipelineStageFlags::TRANSFER,
             lume_core::device::ImageLayout::ShaderReadOnly => vk::PipelineStageFlags::FRAGMENT_SHADER,
+            lume_core::device::ImageLayout::ColorAttachment => vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
+            lume_core::device::ImageLayout::DepthStencilAttachment => vk::PipelineStageFlags::EARLY_FRAGMENT_TESTS | vk::PipelineStageFlags::LATE_FRAGMENT_TESTS,
+            lume_core::device::ImageLayout::Present => vk::PipelineStageFlags::BOTTOM_OF_PIPE,
             _ => vk::PipelineStageFlags::ALL_COMMANDS,
         };
 
@@ -536,6 +567,9 @@ fn map_layout(layout: lume_core::device::ImageLayout) -> vk::ImageLayout {
         lume_core::device::ImageLayout::TransferSrc => vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
         lume_core::device::ImageLayout::TransferDst => vk::ImageLayout::TRANSFER_DST_OPTIMAL,
         lume_core::device::ImageLayout::ShaderReadOnly => vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+        lume_core::device::ImageLayout::ColorAttachment => vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
+        lume_core::device::ImageLayout::DepthStencilAttachment => vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+        lume_core::device::ImageLayout::Present => vk::ImageLayout::PRESENT_SRC_KHR,
     }
 }
 

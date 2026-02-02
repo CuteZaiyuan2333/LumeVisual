@@ -65,7 +65,7 @@ impl ApplicationHandler for App {
         let depth_texture = device.create_texture(TextureDescriptor { width: size.width, height: size.height, depth: 1, format: TextureFormat::Depth32Float, usage: TextureUsage::DEPTH_STENCIL_ATTACHMENT }).unwrap();
         let depth_view = device.create_texture_view(&depth_texture, TextureViewDescriptor { format: None }).unwrap();
 
-        let vis_texture = device.create_texture(TextureDescriptor { width: size.width, height: size.height, depth: 1, format: TextureFormat::R32G32Uint, usage: TextureUsage::RENDER_ATTACHMENT | TextureUsage::TEXTURE_BINDING }).unwrap();
+        let vis_texture = device.create_texture(TextureDescriptor { width: size.width, height: size.height, depth: 1, format: TextureFormat::Rg32Uint, usage: TextureUsage::RENDER_ATTACHMENT | TextureUsage::TEXTURE_BINDING }).unwrap();
         let vis_view = device.create_texture_view(&vis_texture, TextureViewDescriptor { format: None }).unwrap();
 
         // Pass 1 Layout
@@ -88,7 +88,7 @@ impl ApplicationHandler for App {
         }).unwrap();
         let res_layout = device.create_pipeline_layout(PipelineLayoutDescriptor { bind_group_layouts: &[&res_bg_layout] }).unwrap();
 
-        let vis_pass = device.create_render_pass(RenderPassDescriptor { color_format: TextureFormat::R32G32Uint, depth_stencil_format: Some(TextureFormat::Depth32Float) }).unwrap();
+        let vis_pass = device.create_render_pass(RenderPassDescriptor { color_format: TextureFormat::Rg32Uint, depth_stencil_format: Some(TextureFormat::Depth32Float) }).unwrap();
         let vis_framebuffer = device.create_framebuffer(FramebufferDescriptor { render_pass: &vis_pass, attachments: &[&vis_view, &depth_view], width: size.width, height: size.height }).unwrap();
 
         let resolve_pass = device.create_render_pass(RenderPassDescriptor { color_format: TextureFormat::Bgra8UnormSrgb, depth_stencil_format: None }).unwrap();
