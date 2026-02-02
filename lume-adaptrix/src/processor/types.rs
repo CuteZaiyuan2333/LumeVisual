@@ -5,14 +5,13 @@ use serde::{Serialize, Deserialize};
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Pod, Zeroable, Serialize, Deserialize)]
 pub struct ClusterPacked {
-    pub center_radius: [f32; 4],
-    pub vertex_offset: u32,
-    pub triangle_offset: u32,
-    pub vertex_count: u8,
-    pub triangle_count: u8,
-    pub _pad1: u16,
-    pub lod_error: f32,
-    pub parent_error: f32,
+    pub center_radius: [f32; 4], // 16
+    pub vertex_offset: u32,      // 4
+    pub triangle_offset: u32,    // 4
+    pub counts: u32,             // 4 (v8, t8, pad16)
+    pub lod_error: f32,          // 4
+    pub parent_error: f32,       // 4
+    pub _padding: [u32; 3],      // 12 (补齐到 48 字节)
 }
 
 #[derive(Clone, Debug)]

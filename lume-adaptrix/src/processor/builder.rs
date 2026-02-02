@@ -63,7 +63,8 @@ impl NaniteBuilder {
         for &idx in &current_indices {
             let cluster = &self.clusters[idx];
             let start = cluster.vertex_offset as usize;
-            let end = start + cluster.vertex_count as usize;
+            let vertex_count = (cluster.counts & 0xFF) as usize;
+            let end = start + vertex_count;
             cluster_vertices.push(self.meshlet_vertex_indices[start..end].to_vec());
         }
 
@@ -87,8 +88,9 @@ impl NaniteBuilder {
                 let cluster = &self.clusters[c_idx];
                 let v_start = cluster.vertex_offset as usize;
                 let t_start = cluster.triangle_offset as usize;
+                let triangle_count = ((cluster.counts >> 8) & 0xFF) as usize;
                 
-                for i in 0..(cluster.triangle_count as usize * 3) {
+                for i in 0..(triangle_count * 3) {
                     let local_v_idx = self.meshlet_primitive_indices[t_start + i] as usize;
                     let global_v_idx = self.meshlet_vertex_indices[v_start + local_v_idx];
                     let v = self.vertices[global_v_idx as usize];
@@ -178,15 +180,16 @@ impl NaniteBuilder {
             self.meshlet_primitive_indices.push(0);
         }
 
+        let counts = (local_verts.len() as u32 & 0xFF) | (( (local_tris.len() / 3) as u32 & 0xFF) << 8);
+
         let cluster = ClusterPacked {
             center_radius: [center.x, center.y, center.z, radius],
             vertex_offset: v_offset,
             triangle_offset: t_offset,
-            vertex_count: local_verts.len() as u8,
-            triangle_count: (local_tris.len() / 3) as u8,
-            _pad1: 0,
+            counts,
             lod_error,
             parent_error,
+            _padding: [0; 3],
         };
 
         let idx = self.clusters.len();
