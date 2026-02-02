@@ -88,7 +88,7 @@ impl<D: Device> AdaptrixRenderer<D> {
             fragment_shader: &vis_frag,
             render_pass: vis_pass,
             layout: &vis_layout,
-            primitive: PrimitiveState { topology: PrimitiveTopology::TriangleList },
+            primitive: PrimitiveState { topology: PrimitiveTopology::TriangleList, cull_mode: CullMode::None },
             vertex_layout: None,
             depth_stencil: Some(DepthStencilState {
                 format: TextureFormat::Depth32Float,
@@ -105,7 +105,7 @@ impl<D: Device> AdaptrixRenderer<D> {
             fragment_shader: &res_frag,
             render_pass: resolve_pass,
             layout: &resolve_layout,
-            primitive: PrimitiveState { topology: PrimitiveTopology::TriangleList },
+            primitive: PrimitiveState { topology: PrimitiveTopology::TriangleList, cull_mode: CullMode::None },
             vertex_layout: None,
             depth_stencil: None,
         })?;

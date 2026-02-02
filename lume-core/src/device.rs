@@ -279,6 +279,14 @@ pub enum CompareFunction {
 
 pub struct PrimitiveState {
     pub topology: PrimitiveTopology,
+    pub cull_mode: CullMode,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CullMode {
+    None,
+    Front,
+    Back,
 }
 
 pub enum PrimitiveTopology {

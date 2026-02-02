@@ -196,7 +196,7 @@ impl VulkanDevice {
         let rasterizer = vk::PipelineRasterizationStateCreateInfo {
             polygon_mode: vk::PolygonMode::FILL,
             line_width: 1.0,
-            cull_mode: vk::CullModeFlags::NONE,
+            cull_mode: crate::device::resource::map_cull_mode(descriptor.primitive.cull_mode),
             front_face: vk::FrontFace::CLOCKWISE,
             ..Default::default()
         };
@@ -237,7 +237,13 @@ impl VulkanDevice {
                 depth_write_enable: if ds.depth_write_enabled { vk::TRUE } else { vk::FALSE },
                 depth_compare_op: match ds.depth_compare {
                     CompareFunction::Less => vk::CompareOp::LESS,
-                    _ => vk::CompareOp::ALWAYS, // Simplified for brevity, add others as needed
+                    CompareFunction::LessEqual => vk::CompareOp::LESS_OR_EQUAL,
+                    CompareFunction::Greater => vk::CompareOp::GREATER,
+                    CompareFunction::GreaterEqual => vk::CompareOp::GREATER_OR_EQUAL,
+                    CompareFunction::Equal => vk::CompareOp::EQUAL,
+                    CompareFunction::NotEqual => vk::CompareOp::NOT_EQUAL,
+                    CompareFunction::Always => vk::CompareOp::ALWAYS,
+                    CompareFunction::Never => vk::CompareOp::NEVER,
                 },
                 ..Default::default()
             }

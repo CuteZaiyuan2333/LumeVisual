@@ -17,19 +17,21 @@ struct AdaptrixVertex {
 }
 
 struct View {
-    view_proj: mat4x4<f32>,
-    inv_view_proj: mat4x4<f32>,
-    camera_pos: vec3<f32>,
-    pad0: f32,
-    error_threshold: f32,
-    viewport_size: vec2<f32>,
-    pad1: f32,
+    view_proj_0: vec4<f32>,
+    view_proj_1: vec4<f32>,
+    view_proj_2: vec4<f32>,
+    view_proj_3: vec4<f32>,
+    inv_view_proj_0: vec4<f32>,
+    inv_view_proj_1: vec4<f32>,
+    inv_view_proj_2: vec4<f32>,
+    inv_view_proj_3: vec4<f32>,
+    camera_pos_and_threshold: vec4<f32>,
+    viewport_size: vec4<f32>,
 }
 
 @group(0) @binding(0) var<storage, read> clusters: array<Cluster>;
 @group(0) @binding(1) var<storage, read> vertices: array<AdaptrixVertex>;
 @group(0) @binding(2) var<storage, read> meshlet_vertex_indices: array<u32>;
-// 核心修复：引入原始局部索引缓冲区
 @group(0) @binding(3) var<storage, read> primitive_indices: array<u32>; 
 
 @group(1) @binding(0) var<uniform> view: View;
@@ -52,17 +54,13 @@ fn main(in: VertexOutput) -> @location(0) vec4<f32> {
     
     let id = vis_data.y;
     if (id == 0u) {
-        return vec4<f32>(0.05, 0.05, 0.07, 1.0);
+        discard; // 明确丢弃背景，不执行后续逻辑
     }
     
-    // 核心修复：减 1 还原真实 ID
     let cluster_id = (id >> 10u) - 1u;
     let triangle_id = id & 0x3FFu;
-    
     let cluster = clusters[cluster_id];
 
-    // 核心修复：正确解包 u8 局部索引
-    // 我们需要读取三个顶点
     var local_v_indices: array<u32, 3>;
     for (var i = 0u; i < 3u; i = i + 1u) {
         let tri_byte_offset = cluster.triangle_offset + triangle_id * 3u + i;
@@ -84,16 +82,25 @@ fn main(in: VertexOutput) -> @location(0) vec4<f32> {
     let p1 = vec3(v1.px, v1.py, v1.pz);
     let p2 = vec3(v2.px, v2.py, v2.pz);
     
-    // 计算基于真实几何的法线
-    let normal = normalize(cross(p1 - p0, p2 - p0));
+    // --- 仿 Nanite 鲁棒法线重建 ---
+    let edge1 = p1 - p0;
+    let edge2 = p2 - p0;
+    var raw_normal = cross(edge1, edge2);
+    let len_sq = dot(raw_normal, raw_normal);
     
-    // 渲染模式切换：这里我们可以根据 cluster_id 涂色
+    var normal: vec3<f32>;
+    if (len_sq < 1e-12) {
+        normal = vec3<f32>(0.0, 1.0, 0.0); // 极小三角形保底
+    } else {
+        normal = raw_normal * inverseSqrt(len_sq);
+    }
+    
     let r = hash(cluster_id);
     let g = hash(cluster_id + 1u);
     let b = hash(cluster_id + 2u);
     
     let light_dir = normalize(vec3<f32>(1.0, 1.0, 2.0));
-    let diff = max(dot(normal, light_dir), 0.2);
+    let diff = max(abs(dot(normal, light_dir)), 0.2); // 双面光照，防止翻转导致的黑色
     
     return vec4<f32>(vec3(r, g, b) * diff, 1.0);
 }

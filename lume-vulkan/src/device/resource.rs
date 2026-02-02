@@ -256,8 +256,29 @@ pub fn map_texture_format(format: lume_core::device::TextureFormat) -> vk::Forma
 }
 
 pub fn is_depth_format(format: vk::Format) -> bool {
+
     matches!(
+
         format,
+
         vk::Format::D16_UNORM | vk::Format::D32_SFLOAT | vk::Format::S8_UINT | vk::Format::D24_UNORM_S8_UINT
+
     )
+
+}
+
+
+
+pub fn map_cull_mode(mode: lume_core::device::CullMode) -> vk::CullModeFlags {
+
+    match mode {
+
+        lume_core::device::CullMode::None => vk::CullModeFlags::NONE,
+
+        lume_core::device::CullMode::Front => vk::CullModeFlags::FRONT,
+
+        lume_core::device::CullMode::Back => vk::CullModeFlags::BACK,
+
+    }
+
 }
