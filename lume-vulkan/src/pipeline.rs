@@ -1,7 +1,16 @@
 use ash::vk;
+use lume_core::device::ShaderStage;
 use lume_core::{LumeError, LumeResult};
 
 use std::sync::Arc;
+
+fn map_shader_stage(stage: lume_core::device::ShaderStage) -> vk::ShaderStageFlags {
+    let mut flags = vk::ShaderStageFlags::empty();
+    if stage.0 & lume_core::device::ShaderStage::VERTEX.0 != 0 { flags |= vk::ShaderStageFlags::VERTEX; }
+    if stage.0 & lume_core::device::ShaderStage::FRAGMENT.0 != 0 { flags |= vk::ShaderStageFlags::FRAGMENT; }
+    if stage.0 & lume_core::device::ShaderStage::COMPUTE.0 != 0 { flags |= vk::ShaderStageFlags::COMPUTE; }
+    flags
+}
 
 pub struct VulkanShaderModuleInner {
     pub module: vk::ShaderModule,
@@ -397,6 +406,18 @@ impl lume_core::device::CommandBuffer for VulkanCommandBuffer {
                 index,
                 &[bind_group.set],
                 &[],
+            );
+        }
+    }
+
+    fn set_push_constants(&mut self, _layout: &crate::VulkanPipelineLayout, stages: ShaderStage, offset: u32, data: &[u8]) {
+        unsafe {
+            self.device.cmd_push_constants(
+                self.buffer,
+                self.current_pipeline_layout,
+                map_shader_stage(stages),
+                offset,
+                data,
             );
         }
     }

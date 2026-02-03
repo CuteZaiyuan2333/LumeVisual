@@ -6,6 +6,14 @@ use crate::VulkanDevice;
 use std::sync::Arc;
 use crate::{VulkanShaderModuleInner, VulkanRenderPassInner, VulkanPipelineLayoutInner, VulkanGraphicsPipelineInner, VulkanComputePipelineInner};
 
+fn map_shader_stage(stage: lume_core::device::ShaderStage) -> vk::ShaderStageFlags {
+    let mut flags = vk::ShaderStageFlags::empty();
+    if stage.0 & lume_core::device::ShaderStage::VERTEX.0 != 0 { flags |= vk::ShaderStageFlags::VERTEX; }
+    if stage.0 & lume_core::device::ShaderStage::FRAGMENT.0 != 0 { flags |= vk::ShaderStageFlags::FRAGMENT; }
+    if stage.0 & lume_core::device::ShaderStage::COMPUTE.0 != 0 { flags |= vk::ShaderStageFlags::COMPUTE; }
+    flags
+}
+
 impl VulkanDevice {
     pub fn create_shader_module_impl(&self, code: &[u32]) -> LumeResult<crate::VulkanShaderModule> {
         let create_info = vk::ShaderModuleCreateInfo {
@@ -118,9 +126,19 @@ impl VulkanDevice {
     pub fn create_pipeline_layout_impl(&self, descriptor: PipelineLayoutDescriptor<Self>) -> LumeResult<crate::VulkanPipelineLayout> {
         let set_layouts: Vec<vk::DescriptorSetLayout> = descriptor.bind_group_layouts.iter().map(|l| l.layout).collect();
         
+        let push_constant_ranges: Vec<vk::PushConstantRange> = descriptor.push_constant_ranges.iter().map(|r| {
+            vk::PushConstantRange {
+                stage_flags: map_shader_stage(r.stages),
+                offset: r.offset,
+                size: r.size,
+            }
+        }).collect();
+
         let create_info = vk::PipelineLayoutCreateInfo {
             set_layout_count: set_layouts.len() as u32,
             p_set_layouts: set_layouts.as_ptr(),
+            push_constant_range_count: push_constant_ranges.len() as u32,
+            p_push_constant_ranges: push_constant_ranges.as_ptr(),
             ..Default::default()
         };
 

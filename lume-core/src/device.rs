@@ -92,6 +92,7 @@ pub trait CommandBuffer {
     fn bind_compute_pipeline(&mut self, pipeline: &<Self::Device as Device>::ComputePipeline);
     fn bind_vertex_buffer(&mut self, buffer: &<Self::Device as Device>::Buffer);
     fn bind_bind_group(&mut self, index: u32, bind_group: &<Self::Device as Device>::BindGroup);
+    fn set_push_constants(&mut self, layout: &<Self::Device as Device>::PipelineLayout, stages: ShaderStage, offset: u32, data: &[u8]);
     fn set_viewport(&mut self, x: f32, y: f32, width: f32, height: f32);
     fn set_scissor(&mut self, x: i32, y: i32, width: u32, height: u32);
     fn draw(&mut self, vertex_count: u32, instance_count: u32, first_vertex: u32, first_instance: u32);
@@ -245,8 +246,15 @@ pub struct TextureViewDescriptor {
     pub format: Option<TextureFormat>,
 }
 
+pub struct PushConstantRange {
+    pub stages: ShaderStage,
+    pub offset: u32,
+    pub size: u32,
+}
+
 pub struct PipelineLayoutDescriptor<'a, D: Device> {
     pub bind_group_layouts: &'a [&'a D::BindGroupLayout],
+    pub push_constant_ranges: &'a [PushConstantRange],
 }
 
 pub struct GraphicsPipelineDescriptor<'a, D: Device> {

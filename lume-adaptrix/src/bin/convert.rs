@@ -1,6 +1,4 @@
 use std::path::PathBuf;
-use std::fs::File;
-use std::io::{Write, BufWriter};
 use lume_adaptrix::processor::process_mesh;
 use tobj;
 
@@ -47,11 +45,7 @@ fn main() {
 
     println!("Saving adaptrix asset to: {:?}", output_path);
     
-    let file = File::create(output_path).expect("Failed to create output file");
-    let mut writer = BufWriter::new(file);
-    
-    let encoded = bincode::serialize(&asset).expect("Failed to serialize asset");
-    writer.write_all(&encoded).expect("Failed to write to file");
+    lume_adaptrix::AdaptrixAsset::save_to_file(&asset, output_path).expect("Failed to save LAD file");
 
-    println!("Done! Size: {:.2} MB", encoded.len() as f64 / 1024.0 / 1024.0);
+    println!("Done!");
 }

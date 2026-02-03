@@ -110,8 +110,14 @@ impl AdaptrixApp {
         self.visible_count_buffer = Some(device.create_buffer(BufferDescriptor { size: 16, usage: BufferUsage::STORAGE | BufferUsage::COPY_DST | BufferUsage::COPY_SRC | BufferUsage::INDIRECT, mapped_at_creation: true }).unwrap());
         self.visible_count_buffer.as_ref().unwrap().write_data(0, bytemuck::cast_slice(&[372u32, 0, 0, 0])).unwrap();
         
-        self.zero_buffer = Some(device.create_buffer(BufferDescriptor { size: 16, usage: BufferUsage::COPY_SRC, mapped_at_creation: true }).unwrap());
-        self.zero_buffer.as_ref().unwrap().write_data(0, &[0u8; 16]).unwrap();
+        let zero_buffer = device.create_buffer(BufferDescriptor {
+            size: 16,
+            usage: BufferUsage::COPY_SRC,
+            mapped_at_creation: true,
+        }).unwrap();
+        // Correct layout for DrawArgs: vertexCount=372, instanceCount=0, firstVertex=0, firstInstance=0
+        zero_buffer.write_data(0, bytemuck::cast_slice(&[372u32, 0, 0, 0])).unwrap();
+        self.zero_buffer = Some(zero_buffer);
         self.view_buffer = Some(device.create_buffer(BufferDescriptor { size: 160, usage: BufferUsage::UNIFORM | BufferUsage::COPY_DST, mapped_at_creation: true }).unwrap());
 
         self.vis_buffer_texture = Some(device.create_texture(TextureDescriptor { width: size.width, height: size.height, depth: 1, format: TextureFormat::Rg32Uint, usage: TextureUsage::RENDER_ATTACHMENT | TextureUsage::TEXTURE_BINDING }).unwrap());
@@ -132,7 +138,10 @@ impl AdaptrixApp {
             BindGroupLayoutEntry { binding: 5, visibility: ShaderStage::COMPUTE, ty: BindingType::StorageBuffer },
         ] }).unwrap();
         let bgl_c1 = device.create_bind_group_layout(BindGroupLayoutDescriptor { entries: vec![BindGroupLayoutEntry { binding: 0, visibility: ShaderStage::COMPUTE, ty: BindingType::UniformBuffer }] }).unwrap();
-        let l_cull = device.create_pipeline_layout(PipelineLayoutDescriptor { bind_group_layouts: &[&bgl_c0, &bgl_c1] }).unwrap();
+        let l_cull = device.create_pipeline_layout(PipelineLayoutDescriptor { 
+            bind_group_layouts: &[&bgl_c0, &bgl_c1],
+            push_constant_ranges: &[],
+        }).unwrap();
         self.cull_pipeline = Some(device.create_compute_pipeline(ComputePipelineDescriptor { shader: &cull_module, layout: &l_cull }).unwrap());
         self.cull_bind_group_0 = Some(device.create_bind_group(BindGroupDescriptor { layout: &bgl_c0, entries: vec![
             BindGroupEntry { binding: 0, resource: BindingResource::Buffer(self.cluster_buffer.as_ref().unwrap()) },
@@ -153,7 +162,10 @@ impl AdaptrixApp {
             BindGroupLayoutEntry { binding: 5, visibility: ShaderStage::VERTEX, ty: BindingType::StorageBuffer },
         ] }).unwrap();
         let bgl_v1 = device.create_bind_group_layout(BindGroupLayoutDescriptor { entries: vec![BindGroupLayoutEntry { binding: 0, visibility: ShaderStage::VERTEX, ty: BindingType::UniformBuffer }] }).unwrap();
-        let l_vis = device.create_pipeline_layout(PipelineLayoutDescriptor { bind_group_layouts: &[&bgl_v0, &bgl_v1] }).unwrap();
+        let l_vis = device.create_pipeline_layout(PipelineLayoutDescriptor { 
+            bind_group_layouts: &[&bgl_v0, &bgl_v1],
+            push_constant_ranges: &[],
+        }).unwrap();
         self.vis_pipeline = Some(device.create_graphics_pipeline(GraphicsPipelineDescriptor { vertex_shader: &vis_v_mod, fragment_shader: &vis_f_mod, render_pass: &vis_rp, layout: &l_vis, primitive: PrimitiveState { topology: PrimitiveTopology::TriangleList, cull_mode: CullMode::None }, vertex_layout: None, depth_stencil: Some(DepthStencilState { format: TextureFormat::Depth32Float, depth_write_enabled: true, depth_compare: CompareFunction::LessEqual }) }).unwrap());
         self.vis_bind_group_0 = Some(device.create_bind_group(BindGroupDescriptor { layout: &bgl_v0, entries: vec![
             BindGroupEntry { binding: 0, resource: BindingResource::Buffer(self.cluster_buffer.as_ref().unwrap()) },
@@ -178,7 +190,10 @@ impl AdaptrixApp {
             BindGroupLayoutEntry { binding: 3, visibility: ShaderStage::FRAGMENT, ty: BindingType::StorageBuffer },
         ] }).unwrap();
         let bgl_r1 = device.create_bind_group_layout(BindGroupLayoutDescriptor { entries: vec![BindGroupLayoutEntry { binding: 0, visibility: ShaderStage::FRAGMENT, ty: BindingType::UniformBuffer }, BindGroupLayoutEntry { binding: 1, visibility: ShaderStage::FRAGMENT, ty: BindingType::SampledTexture }] }).unwrap();
-        let l_res = device.create_pipeline_layout(PipelineLayoutDescriptor { bind_group_layouts: &[&bgl_r0, &bgl_r1] }).unwrap();
+        let l_res = device.create_pipeline_layout(PipelineLayoutDescriptor { 
+            bind_group_layouts: &[&bgl_r0, &bgl_r1],
+            push_constant_ranges: &[],
+        }).unwrap();
         self.resolve_pipeline = Some(device.create_graphics_pipeline(GraphicsPipelineDescriptor { vertex_shader: &res_v_mod, fragment_shader: &res_f_mod, render_pass: &res_rp, layout: &l_res, primitive: PrimitiveState { topology: PrimitiveTopology::TriangleList, cull_mode: CullMode::None }, vertex_layout: None, depth_stencil: None }).unwrap());
         self.resolve_bind_group_0 = Some(device.create_bind_group(BindGroupDescriptor { layout: &bgl_r0, entries: vec![
             BindGroupEntry { binding: 0, resource: BindingResource::Buffer(self.cluster_buffer.as_ref().unwrap()) },
@@ -232,18 +247,20 @@ impl ApplicationHandler for AdaptrixApp {
                     static mut FRAME_COUNT: u32 = 0;
                     unsafe {
                         FRAME_COUNT += 1;
-                        if FRAME_COUNT % 100 == 0 {
+                        if FRAME_COUNT % 60 == 0 {
                             let _ = device.wait_idle(); 
                             let mut counts = [0u32; 4];
                             let _ = self.visible_count_buffer.as_ref().unwrap().read_data(0, bytemuck::cast_slice_mut(&mut counts));
-                            println!("Visible clusters: {}", counts[1]); 
+                            let total = self.asset.as_ref().unwrap().clusters.len();
+                            println!("Rendered: {} / {} clusters ({:.1}%)", 
+                                     counts[1], total, (counts[1] as f32 / total as f32) * 100.0); 
                         }
                     }
 
                     let cmd = self.command_buffer.as_mut().unwrap();
                     cmd.reset().unwrap(); cmd.begin().unwrap();
                     
-                    cmd.copy_buffer_to_buffer_offset(self.zero_buffer.as_ref().unwrap(), 0, self.visible_count_buffer.as_ref().unwrap(), 4, 4);
+                    cmd.copy_buffer_to_buffer(self.zero_buffer.as_ref().unwrap(), self.visible_count_buffer.as_ref().unwrap(), 16);
                     cmd.compute_barrier();
 
                     cmd.bind_compute_pipeline(self.cull_pipeline.as_ref().unwrap());

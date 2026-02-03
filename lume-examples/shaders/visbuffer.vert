@@ -10,16 +10,19 @@ struct Cluster {
     vec4 center_radius;
     uint vertex_offset;
     uint triangle_offset;
-    uint vertex_count;
-    uint triangle_count;
+    uint counts;
+    float lod_error;
+    float parent_error;
+    uint _pad0;
     uint _pad1;
-    float error_metric;
+    uint _pad2;
 };
 
 layout(std430, set = 0, binding = 0) readonly buffer ClusterBuffer { Cluster clusters[]; };
 layout(std430, set = 0, binding = 1) readonly buffer VertexBuffer { Vertex vertices[]; };
 layout(std430, set = 0, binding = 2) readonly buffer MeshletVertexIndices { uint vertex_indices[]; };
 layout(std430, set = 0, binding = 3) readonly buffer MeshletPrimitiveIndices { uint primitive_indices_packed[]; };
+layout(std430, set = 0, binding = 5) readonly buffer VisibleClusters { uint visible_indices[]; };
 
 layout(set = 0, binding = 4) uniform Uniforms {
     mat4 mvp;
@@ -29,17 +32,15 @@ layout(location = 0) out flat uint outClusterID;
 layout(location = 1) out flat uint outPrimitiveID;
 
 void main() {
-    uint clusterID = gl_VertexIndex / 372;
-    if (clusterID >= clusters.length()) {
-        gl_Position = vec4(0.0, 0.0, 0.0, 0.0);
-        return;
-    }
-
-    uint triID = (gl_VertexIndex % 372) / 3;
+    // 现在 gl_InstanceIndex 代表可见集群列表中的索引
+    uint clusterID = visible_indices[gl_InstanceIndex];
+    
+    uint triID = gl_VertexIndex / 3;
     uint vertInTri = gl_VertexIndex % 3;
 
     Cluster cluster = clusters[clusterID];
-    if (triID >= uint(cluster.triangle_count)) {
+    // 保护：虽然剔除逻辑应该处理好，但此处作为兜底
+    if (triID >= ((cluster.counts >> 8) & 0xFF)) {
         gl_Position = vec4(0.0, 0.0, 0.0, 0.0);
         return;
     }

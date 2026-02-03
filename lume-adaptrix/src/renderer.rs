@@ -1,6 +1,6 @@
 use lume_core::device::*;
 use lume_core::LumeResult;
-use crate::{AdaptrixFlatAsset, ClusterPacked, AdaptrixVertex};
+use crate::{AdaptrixAsset, ClusterPacked, AdaptrixVertex};
 
 pub struct AdaptrixMeshGPU<D: Device> {
     pub cluster_buffer: D::Buffer,
@@ -11,7 +11,7 @@ pub struct AdaptrixMeshGPU<D: Device> {
 }
 
 impl<D: Device> AdaptrixMeshGPU<D> {
-    pub fn new(device: &D, asset: &AdaptrixFlatAsset) -> LumeResult<Self> {
+    pub fn new(device: &D, asset: &AdaptrixAsset) -> LumeResult<Self> {
         let cluster_buffer = device.create_buffer(BufferDescriptor {
             size: (asset.clusters.len() * std::mem::size_of::<ClusterPacked>()) as u64,
             usage: BufferUsage::STORAGE | BufferUsage::COPY_DST,
@@ -68,6 +68,7 @@ impl<D: Device> AdaptrixRenderer<D> {
         vis_frag_spv: &[u32],
         resolve_vert_spv: &[u32], 
         resolve_frag_spv: &[u32],
+        cull_layout: D::PipelineLayout,
         vis_layout: D::PipelineLayout,
         resolve_layout: D::PipelineLayout,
         vis_pass: &D::RenderPass,
@@ -77,7 +78,7 @@ impl<D: Device> AdaptrixRenderer<D> {
         let cull_mod = device.create_shader_module(cull_spv)?;
         let culling_pipeline = device.create_compute_pipeline(ComputePipelineDescriptor {
             shader: &cull_mod,
-            layout: &vis_layout, 
+            layout: &cull_layout, 
         })?;
 
         let vis_vert = device.create_shader_module(vis_vert_spv)?;
@@ -114,7 +115,7 @@ impl<D: Device> AdaptrixRenderer<D> {
             culling_pipeline,
             visbuffer_pipeline,
             resolve_pipeline,
-            culling_layout: vis_layout.clone(),
+            culling_layout: cull_layout,
             visbuffer_layout: vis_layout,
             resolve_layout: resolve_layout,
         })

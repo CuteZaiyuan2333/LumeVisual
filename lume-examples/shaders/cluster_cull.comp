@@ -4,10 +4,12 @@ struct Cluster {
     vec4 center_radius;
     uint vertex_offset;
     uint triangle_offset;
-    uint vertex_count;
-    uint triangle_count;
+    uint counts;
+    float lod_error;
+    float parent_error;
+    uint _pad0;
     uint _pad1;
-    float error_metric;
+    uint _pad2;
 };
 
 layout(std430, set = 0, binding = 0) readonly buffer ClusterBuffer {
@@ -19,23 +21,21 @@ layout(std430, set = 0, binding = 1) writeonly buffer VisibleClusters {
     uint visible_indices[];
 };
 
-// 输出：用于 vkCmdDrawIndirect 的参数
-struct DrawIndexedIndirectCommand {
-    uint indexCount;
+// 输出：用于 vkCmdDrawIndirect 的参数 (针对顶点渲染，因为 VisBuffer 通常手动解包)
+struct DrawIndirectCommand {
+    uint vertexCount;
     uint instanceCount;
-    uint firstIndex;
-    int  vertexOffset;
+    uint firstVertex;
     uint firstInstance;
 };
 
 layout(std430, set = 0, binding = 2) buffer DrawArgs {
     uint count; // 可见集群数量
-    DrawIndexedIndirectCommand args[];
+    DrawIndirectCommand arg;
 };
 
 layout(push_constant) uniform Config {
     mat4 view_proj;
-    vec4 frustum_planes[6];
     vec3 camera_pos;
     float screen_width;
     float lod_threshold;
@@ -44,12 +44,31 @@ layout(push_constant) uniform Config {
 layout(local_size_x = 64) in;
 
 bool is_visible(vec3 center, float radius) {
+    // 从 view_proj 动态提取 6 个视锥体平面
+    vec4 planes[6];
+    mat4 m = config.view_proj;
+    planes[0] = m[3] + m[0]; // Left
+    planes[1] = m[3] - m[0]; // Right
+    planes[2] = m[3] + m[1]; // Bottom
+    planes[3] = m[3] - m[1]; // Top
+    planes[4] = m[3] + m[2]; // Near
+    planes[5] = m[3] - m[2]; // Far
+
     for (int i = 0; i < 6; i++) {
-        if (dot(vec4(center, 1.0), config.frustum_planes[i]) < -radius) {
+        vec4 plane = planes[i];
+        plane /= length(plane.xyz); // 归一化
+        if (dot(vec4(center, 1.0), plane) < -radius) {
             return false;
         }
     }
     return true;
+}
+
+float project_error(float error, vec3 center, float radius) {
+    if (error <= 0.0) return 0.0;
+    float dist = max(distance(center, config.camera_pos) - radius, 0.0001);
+    // 简化投影公式：error * screen_width / (dist * tan_half_fov)
+    return (error * config.screen_width) / (dist * 0.5); 
 }
 
 void main() {
@@ -63,16 +82,19 @@ void main() {
     // 1. 视锥剔除
     if (!is_visible(center, radius)) return;
 
-    // 2. LOD 选择 (简化版)
-    // 计算边界球到相机的距离
-    float dist = distance(center, config.camera_pos);
-    float projected_error = (cluster.error_metric * config.screen_width) / (dist * 2.0 * tan(0.785 / 2.0)); 
-    
-    // 如果误差过大，说明需要细分（但在本层级，我们只决定是否渲染当前节点）
-    // 在完整的 DAG 中，逻辑更复杂。这里我们假设只有一层或简单的距离剔除。
-    if (projected_error > config.lod_threshold) return;
+    // 2. Nanite LOD 选择逻辑
+    // 如果当前节点的误差投影到屏幕上足够小，且父节点误差投影很大，则渲染当前节点
+    float err = project_error(cluster.lod_error, center, radius);
+    float p_err = project_error(cluster.parent_error, center, radius);
 
-    // 3. 记录可见集群
-    uint slot = atomicAdd(count, 1);
-    visible_indices[slot] = gID;
+    if (err <= config.lod_threshold && p_err > config.lod_threshold) {
+        // 3. 记录可见集群
+        uint slot = atomicAdd(count, 1);
+        visible_indices[slot] = gID;
+        
+        // 4. 更新 DrawIndirect 参数 (每个线程都尝试原子更新总量是不对的，
+        // 实际上 Nanite 会根据 triangle_count 动态填充索引，
+        // 这里我们先简化：由一个固定线程初始化 Indirect 参数，后续仅增加 instanceCount)
+        atomicAdd(arg.instanceCount, 1);
+    }
 }
