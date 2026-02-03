@@ -140,7 +140,8 @@ impl NaniteBuilder {
                 0.01 * (2.0f32.powi(level as i32)), &locked
             );
             
-            let parent_error = max_child_error + simplified.error + 0.001;
+            // Enforce strict monotonicity: parent error must be >= child error
+            let parent_error = max_child_error.max(simplified.error + 0.0001);
             let mut res = LevelGroupResult {
                 new_clusters: Vec::new(), new_v_indices: Vec::new(), new_p_indices: Vec::new(),
                 children: group.cluster_indices, parent_error,

@@ -54,56 +54,143 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
 
 
 
-        let center = cluster.center_radius.xyz;
-    let radius = cluster.center_radius.w;
+            // --- 1. 视锥剔除 (参考 Gribb-Hartmann 算法 & UE5 逻辑) ---
 
-        // --- 1. 视锥剔除 (针对 Vulkan Z[0, 1] 优化) ---
 
-        let m0 = view.view_proj_0;
 
-        let m1 = view.view_proj_1;
+            let center = cluster.center_radius.xyz;
 
-        let m2 = view.view_proj_2;
 
-        let m3 = view.view_proj_3;
+
+            let radius = cluster.center_radius.w;
+
+
+
+            
+
+
+
+            // 构建 mat4 并转置，以便通过索引获取“行”
+
+
+
+            let m = transpose(mat4x4<f32>(
+
+
+
+                view.view_proj_0,
+
+
+
+                view.view_proj_1,
+
+
+
+                view.view_proj_2,
+
+
+
+                view.view_proj_3
+
+
+
+            ));
+
+
 
         
 
-        // 提取 6 个视锥体平面
 
-        var planes = array<vec4<f32>, 6>(
 
-            m3 + m0, // Left
+            // 根据投影矩阵的行提取 6 个视锥体平面
 
-            m3 - m0, // Right
 
-            m3 + m1, // Bottom
 
-            m3 - m1, // Top
+            // 平面方程：dot(plane.xyz, pos) + plane.w = 0
 
-            m2,      // Near (Vulkan 深度从 0 开始，所以直接用 m2)
 
-            m3 - m2  // Far
 
-        );
+            // 如果结果 < 0，则点在平面外
 
-    
 
-        for (var i = 0; i < 6; i = i + 1) {
 
-            var plane = planes[i];
+            var planes: array<vec4<f32>, 6>;
 
-            let length_inv = 1.0 / length(plane.xyz);
 
-            plane = plane * length_inv; // 归一化
 
-            if (dot(vec4<f32>(center, 1.0), plane) < -radius) {
+            planes[0] = m[3] + m[0]; // Left:   w + x >= 0
 
-                return; // 集群完全在视锥体外
+
+
+            planes[1] = m[3] - m[0]; // Right:  w - x >= 0
+
+
+
+            planes[2] = m[3] + m[1]; // Bottom: w + y >= 0
+
+
+
+            planes[3] = m[3] - m[1]; // Top:    w - y >= 0
+
+
+
+            planes[4] = m[2];        // Near:   z >= 0 (Vulkan 专用)
+
+
+
+            planes[5] = m[3] - m[2]; // Far:    w - z >= 0 (Vulkan 专用)
+
+
+
+        
+
+
+
+            for (var i = 0; i < 6; i = i + 1) {
+
+
+
+                var plane = planes[i];
+
+
+
+                // 归一化法线部分
+
+
+
+                let length_inv = 1.0 / length(plane.xyz);
+
+
+
+                plane = plane * length_inv; 
+
+
+
+                
+
+
+
+                // 球体视锥剔除判定
+
+
+
+                if (dot(vec4<f32>(center, 1.0), plane) < -radius) {
+
+
+
+                    return; // 集群在平面外，直接丢弃
+
+
+
+                }
+
+
 
             }
 
-        }
+
+
+        
 
     
 
@@ -113,36 +200,28 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
 
 
 
-    // --- 2. Nanite LOD 选择 ---
-
-    // 计算到边界球的最短距离
-
+    // --- 2. Nanite LOD 选择 (参考 UE5 核心逻辑) ---
+    // 计算边界球到相机的最短距离
     let dist = max(length(center - camera_pos) - radius, 0.0001);
-
     
-
-    // 投影误差公式 (简化版)
-
+    // 投影公式：error * screen_height / (2.0 * dist * tan(half_fov))
+    // 其中 0.414 是 tan(45deg / 2) 的近似值
     let screen_factor = view.viewport_size.y / (2.0 * 0.414);
-
+    
+    // 将几何误差投影到屏幕空间（像素）
     let error_px = (cluster.lod_error * screen_factor) / dist;
-
     let parent_error_px = (cluster.parent_error * screen_factor) / dist;
 
-
-
-    // 只有当当前节点够细，且父节点不够细时，才渲染它
-
-    if (error_px <= threshold_px && parent_error_px > (threshold_px + 0.0001)) {
-
+    // --- 核心判定条件 ---
+    // 判定逻辑：当前集群的误差在阈值内（足够精细），且其父集群的误差超出阈值（父级不够精细）
+    // 这在 DAG 中形成了一个唯一的“切割面（Cut）”，确保每个像素只被覆盖一次
+    // 增加一个小 epsilon (1e-4) 处理浮点边界情况
+    let is_leaf = cluster.parent_error > 9e9; // 根节点或未处理节点
+    
+    if (error_px <= threshold_px && (parent_error_px > threshold_px || is_leaf)) {
         let slot = atomicAdd(&draw_args.instance_count, 1u);
-
         if (slot < arrayLength(&visible_clusters)) {
-
             visible_clusters[slot] = cluster_idx;
-
         }
-
     }
-
 }
