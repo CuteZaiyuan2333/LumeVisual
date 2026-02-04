@@ -36,16 +36,16 @@ fn main() {
     
     // 转换 tobj 数据格式到 process_mesh 期望的 &[f32]
     // tobj positions 也是 flat Vec<f32>
-    let asset = process_mesh(
+    let (asset, root_index) = process_mesh(
         &mesh.positions, 
         &mesh.normals, 
         &mesh.texcoords, 
         &mesh.indices
     );
 
-    println!("Saving adaptrix asset to: {:?}", output_path);
+    println!("Saving adaptrix asset to: {:?} (Root Index: {})", output_path, root_index);
     
-    lume_adaptrix::AdaptrixAsset::save_to_file(&asset, output_path).expect("Failed to save LAD file");
+    lume_adaptrix::AdaptrixAsset::save_to_file(&asset, root_index, output_path).expect("Failed to save LAD file");
 
     println!("Done!");
 }

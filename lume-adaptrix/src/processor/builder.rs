@@ -9,6 +9,7 @@ pub struct NaniteBuilder {
     pub clusters: Vec<ClusterPacked>,
     pub meshlet_vertex_indices: Vec<u32>,
     pub meshlet_primitive_indices: Vec<u8>,
+    pub cluster_children: Vec<u32>, // 平铺存储所有子节点的 ID
 }
 
 impl NaniteBuilder {
@@ -18,13 +19,16 @@ impl NaniteBuilder {
             clusters: Vec::with_capacity(10000),
             meshlet_vertex_indices: Vec::with_capacity(100000),
             meshlet_primitive_indices: Vec::with_capacity(300000),
+            cluster_children: Vec::with_capacity(20000),
         }
     }
 
-    pub fn build(mut self, indices: &[u32]) -> AdaptrixFlatAsset {
+    pub fn build(mut self, indices: &[u32]) -> (AdaptrixFlatAsset, u32) {
         let mut current_level_indices = self.generate_level0(indices);
         
         let mut level = 0;
+        let mut root_index = 0;
+
         while current_level_indices.len() > 1 {
             println!("Building Level {}: {} clusters", level, current_level_indices.len());
             let (next_indices, level_data) = self.build_next_level_parallel(&current_level_indices, level);
@@ -35,13 +39,31 @@ impl NaniteBuilder {
             let v_base = self.meshlet_vertex_indices.len() as u32;
             let t_base = self.meshlet_primitive_indices.len() as u32;
 
-            for ld in level_data {
+            let mut next_gen_start_idx = self.clusters.len() as u32;
+            let mut ld_new_cluster_offsets = Vec::new();
+
+            // 首先预分配并记录偏移
+            for ld in &level_data {
+                ld_new_cluster_offsets.push(next_gen_start_idx);
+                next_gen_start_idx += ld.new_clusters.len() as u32;
+            }
+
+            for (i, ld) in level_data.into_iter().enumerate() {
+                let parent_idx = ld_new_cluster_offsets[i]; // 这组子节点的“主”父节点
+                let c_base = self.cluster_children.len() as u32;
+                let c_count = ld.children.len() as u32;
+                self.cluster_children.extend(&ld.children);
+
                 for &child_idx in &ld.children {
                     self.clusters[child_idx as usize].parent_error = ld.parent_error;
                 }
+
                 for mut c in ld.new_clusters {
                     c.vertex_offset += v_base;
                     c.triangle_offset += t_base;
+                    // 在 DAG 中，这一组新生成的 Cluster 共同拥有这组 children
+                    c.child_base = c_base;
+                    c.child_count = c_count;
                     self.clusters.push(c);
                 }
                 self.meshlet_vertex_indices.extend(ld.new_v_indices);
@@ -50,15 +72,17 @@ impl NaniteBuilder {
 
             if next_indices.len() >= current_level_indices.len() { break; }
             current_level_indices = next_indices;
+            root_index = current_level_indices[0]; // 最后一个生成的通常是根区域
             level += 1;
         }
 
-        AdaptrixFlatAsset {
+        (AdaptrixFlatAsset {
             clusters: self.clusters,
             vertices: self.vertices,
             meshlet_vertex_indices: self.meshlet_vertex_indices,
             meshlet_primitive_indices: self.meshlet_primitive_indices,
-        }
+            cluster_children: self.cluster_children,
+        }, root_index)
     }
 
     fn generate_level0(&mut self, indices: &[u32]) -> Vec<u32> {
@@ -82,7 +106,9 @@ impl NaniteBuilder {
                 counts: (m.vertices.len() as u32 & 0xFF) | ((m.triangle_count as u32 & 0xFF) << 8),
                 lod_error: 0.0,
                 parent_error: 1e10,
-                _padding: [0; 3],
+                child_count: 0,
+                child_base: 0,
+                _padding: [0; 1],
             });
             cluster_indices.push(idx);
         }
@@ -159,7 +185,10 @@ impl NaniteBuilder {
                     center_radius: self.calculate_bounding_sphere(&res.new_v_indices[v_off as usize ..]),
                     vertex_offset: v_off, triangle_offset: t_off,
                     counts: (m.vertices.len() as u32 & 0xFF) | ((m.triangle_count as u32 & 0xFF) << 8),
-                    lod_error: parent_error, parent_error: 1e10, _padding: [0; 3],
+                    lod_error: parent_error, parent_error: 1e10,
+                    child_count: 0, // Will be filled in the main loop
+                    child_base: 0,
+                    _padding: [0; 1],
                 });
             }
             res

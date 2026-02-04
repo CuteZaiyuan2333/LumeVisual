@@ -11,7 +11,7 @@ pub fn process_mesh(
     normals: &[f32],
     uvs: &[f32],
     indices: &[u32],
-) -> AdaptrixFlatAsset {
+) -> (AdaptrixFlatAsset, u32) {
     let mut vertices = Vec::new();
     let vertex_count = positions.len() / 3;
     
