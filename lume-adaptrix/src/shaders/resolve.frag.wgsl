@@ -36,6 +36,7 @@ struct View {
 
 @group(1) @binding(0) var<uniform> view: View;
 @group(1) @binding(1) var vis_buffer: texture_2d<u32>; 
+@group(1) @binding(2) var<storage, read> sw_id_buffer: array<atomic<u32>>;
 
 struct VertexOutput {
     @builtin(position) position: vec4<f32>,
@@ -52,9 +53,25 @@ fn main(in: VertexOutput) -> @location(0) vec4<f32> {
     let pixel = vec2<i32>(in.position.xy);
     let vis_data = textureLoad(vis_buffer, pixel, 0);
     
-    let id = vis_data.y;
+    var id = vis_data.y;
+    var is_sw = false;
     if (id == 0u) {
-        return vec4<f32>(1.0, 0.0, 1.0, 1.0); // 亮紫色诊断背景
+        // SW补洞层：仅当HW没有写入id时才回退
+        let w = u32(view.viewport_size.x);
+        let idx = u32(pixel.y) * w + u32(pixel.x);
+        let combined = atomicLoad(&sw_id_buffer[idx]);
+        let id_u16 = combined & 0xFFFFu;
+        if (id_u16 != 0u) {
+            // Reconstruct ID from the 16-bit packed format
+            // payload_id = ((cluster_id + 1u) << 6u) | (t & 0x3Fu)
+            let cluster_id_plus_1 = id_u16 >> 6u;
+            let triangle_id = id_u16 & 0x3Fu;
+            id = (cluster_id_plus_1 << 10u) | triangle_id;
+            is_sw = true;
+        }
+    }
+    if (id == 0u) {
+        return vec4<f32>(0.02, 0.02, 0.03, 1.0); // 背景色
     }
     
     let cluster_id = (id >> 10u) - 1u;

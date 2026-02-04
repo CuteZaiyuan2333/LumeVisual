@@ -180,8 +180,11 @@ pub enum TextureFormat {
     Bgra8UnormSrgb,
     Rgba8UnormSrgb,
     Rgba8Unorm,
-    R32Uint,
     Rg32Uint,
+    /// Single-channel 32-bit unsigned integer (for atomic-capable storage images, etc.)
+    R32Uint,
+    /// Single-channel 32-bit float (for HZB, depth copies, etc.)
+    R32Float,
     Depth32Float,
 }
 

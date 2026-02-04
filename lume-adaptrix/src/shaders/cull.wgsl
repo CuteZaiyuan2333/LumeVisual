@@ -37,20 +37,12 @@ struct View {
 }
 
 @group(0) @binding(0) var<storage, read> all_clusters: array<Cluster>;
-@group(0) @binding(3) var<storage, read_write> hw_visible_clusters: array<u32>;
+@group(0) @binding(1) var<storage, read_write> hw_visible_clusters: array<u32>;
 @group(0) @binding(5) var<storage, read_write> hw_draw_args: DrawArgs; 
-@group(0) @binding(6) var<storage, read_write> sw_visible_clusters: array<u32>;
-@group(0) @binding(7) var<storage, read_write> sw_dispatch_args: DispatchIndirect;
+@group(0) @binding(2) var<storage, read_write> sw_visible_clusters: array<u32>;
+@group(0) @binding(3) var<storage, read_write> sw_dispatch_args: DispatchIndirect;
 
 @group(1) @binding(0) var<uniform> view: View;
-
-fn project_sphere_rect(center: vec3<f32>, radius: f32, view_proj: mat4x4<f32>) -> vec4<f32> {
-    let view_pos = view_proj * vec4<f32>(center, 1.0);
-    let d = abs(view_pos.w);
-    let screen_radius = (radius / max(d, 0.0001)) * view.viewport_size.y; 
-    let box_size = screen_radius * 2.0;
-    return vec4<f32>(box_size, box_size, 0.0, 0.0);
-}
 
 @compute @workgroup_size(64)
 fn main(@builtin(global_invocation_id) id: vec3<u32>) {
@@ -96,19 +88,25 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     let is_leaf = cluster.parent_error > 9e9; 
     
     if (error_px <= threshold_px && (parent_error_px > threshold_px || is_leaf)) {
-        // --- 3. Hybrid Rasterization Split ---
-        let rect = project_sphere_rect(center, radius, transpose(m));
-        let max_extent = max(rect.x, rect.y);
+        // --- 3. Hybrid Split (HW main + SW补洞层) ---
+        // SW仅用于屏幕投影极小的cluster（避免过多像素开销），并在Resolve中作为HW id==0 的回退。
+        // 注意：SW渲染pass必须在帧图中真实执行，否则会出现镂空。
+        let view_pos = mat4x4<f32>(view.view_proj_0, view.view_proj_1, view.view_proj_2, view.view_proj_3) * vec4<f32>(center, 1.0);
+        let d = abs(view_pos.w);
+        let screen_radius = (radius / max(d, 0.0001)) * view.viewport_size.y;
+        let max_extent = screen_radius * 2.0;
 
-        // 临时禁用软光栅以验证 HW 路径
-        if (false && max_extent < 32.0) {
+        if (max_extent < 20.0) {
             let slot = atomicAdd(&sw_dispatch_args.x, 1u);
             if (slot < arrayLength(&sw_visible_clusters)) {
+                // We don't store triangles here, just cluster index
+                // but the soft_raster needs to know which cluster to process.
                 sw_visible_clusters[slot] = cluster_idx;
             }
         } else {
             let slot = atomicAdd(&hw_draw_args.instance_count, 1u);
             if (slot < arrayLength(&hw_visible_clusters)) {
+                // HW rendering uses the full 32-bit ID since it has RG32Uint target
                 hw_visible_clusters[slot] = cluster_idx;
             }
         }

@@ -7,7 +7,7 @@ use std::sync::Arc;
 use std::time::SystemTime;
 use image::GenericImageView;
 use glam::{Mat4, Vec3};
-use lume_core::{Instance, InstanceDescriptor, Backend, Device, shader::{compile_shader, ShaderSource}, device::{SwapchainDescriptor, RenderPassDescriptor, TextureFormat, PipelineLayoutDescriptor, GraphicsPipelineDescriptor, PrimitiveState, PrimitiveTopology, CommandPool, CommandBuffer, FramebufferDescriptor, Swapchain, Buffer, BindGroupLayoutDescriptor, BindGroupLayoutEntry, ShaderStage, BindingType, BindGroupDescriptor, BindGroupEntry, BindingResource, TextureDescriptor, TextureUsage, SamplerDescriptor, FilterMode, AddressMode, TextureViewDescriptor, ImageLayout, DepthStencilState, CompareFunction, CullMode}};
+use lume_core::{Instance, InstanceDescriptor, Backend, Device, shader::{compile_shader, ShaderSource}, device::{SwapchainDescriptor, RenderPassDescriptor, TextureFormat, PipelineLayoutDescriptor, GraphicsPipelineDescriptor, PrimitiveState, PrimitiveTopology, CommandPool, CommandBuffer, FramebufferDescriptor, Swapchain, Buffer, BindGroupLayoutDescriptor, BindGroupLayoutEntry, ShaderStage, BindingType, BindGroupDescriptor, BindGroupEntry, BindingResource, TextureDescriptor, TextureUsage, SamplerDescriptor, FilterMode, AddressMode, TextureViewDescriptor, ImageLayout, DepthStencilState, CompareFunction}};
 use lume_vulkan::VulkanInstance;
 
 struct App {
@@ -172,9 +172,9 @@ impl ApplicationHandler for App {
 
             log::info!("Creating Pipeline Layout...");
             let layout = device.create_pipeline_layout(PipelineLayoutDescriptor {
-                bind_group_layouts: &[],
+                bind_group_layouts: &[&bind_group_layout],
                 push_constant_ranges: &[],
-            }).unwrap();
+            }).expect("Failed to create layout");
 
             log::info!("Creating Graphics Pipeline...");
 
@@ -186,7 +186,7 @@ impl ApplicationHandler for App {
                 layout: &layout,
                 primitive: PrimitiveState {
                     topology: PrimitiveTopology::TriangleList,
-                    cull_mode: CullMode::None,
+                    cull_mode: lume_core::device::CullMode::Back,
                 },
                 vertex_layout: Some(lume_core::device::VertexLayout {
                     array_stride: 20, // (3 + 2) * 4
