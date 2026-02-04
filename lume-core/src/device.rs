@@ -98,6 +98,7 @@ pub trait CommandBuffer {
     fn draw(&mut self, vertex_count: u32, instance_count: u32, first_vertex: u32, first_instance: u32);
     fn draw_indirect(&mut self, buffer: &<Self::Device as Device>::Buffer, offset: u64, draw_count: u32, stride: u32);
     fn dispatch(&mut self, x: u32, y: u32, z: u32);
+    fn dispatch_indirect(&mut self, buffer: &<Self::Device as Device>::Buffer, offset: u64);
     fn copy_buffer_to_buffer(&mut self, source: &<Self::Device as Device>::Buffer, destination: &<Self::Device as Device>::Buffer, size: u64);
     fn copy_buffer_to_buffer_offset(&mut self, source: &<Self::Device as Device>::Buffer, src_offset: u64, destination: &<Self::Device as Device>::Buffer, dst_offset: u64, size: u64);
     fn copy_buffer_to_texture(&mut self, buffer: &<Self::Device as Device>::Buffer, texture: &<Self::Device as Device>::Texture, width: u32, height: u32);
@@ -179,6 +180,7 @@ pub enum TextureFormat {
     Bgra8UnormSrgb,
     Rgba8UnormSrgb,
     Rgba8Unorm,
+    R32Uint,
     Rg32Uint,
     Depth32Float,
 }

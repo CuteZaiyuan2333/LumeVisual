@@ -1,33 +1,42 @@
 struct Cluster {
+    center_radius: vec4<f32>,
     vertex_offset: u32,
     triangle_offset: u32,
-    vertex_count: u32,
-    triangle_count: u32,
-    bounding_sphere: vec4<f32>,
-    error_metric: f32,
+    counts: u32,
+    lod_error: f32,
     parent_error: f32,
-};
+    pad0: u32,
+    pad1: u32,
+    pad2: u32,
+}
 
 struct AdaptrixVertex {
     position: vec3<f32>,
     normal: vec3<f32>,
     uv: vec2<f32>,
-};
+}
 
 struct View {
-    view_proj: mat4x4<f32>,
-    inv_view_proj: mat4x4<f32>,
-    frustum: array<vec4<f32>, 6>,
-    viewport_size: vec2<f32>,
-    error_threshold: f32,
-};
+    view_proj_0: vec4<f32>,
+    view_proj_1: vec4<f32>,
+    view_proj_2: vec4<f32>,
+    view_proj_3: vec4<f32>,
+    inv_view_proj_0: vec4<f32>,
+    inv_view_proj_1: vec4<f32>,
+    inv_view_proj_2: vec4<f32>,
+    inv_view_proj_3: vec4<f32>,
+    camera_pos_and_threshold: vec4<f32>,
+    viewport_size: vec4<f32>,
+}
 
 @group(0) @binding(0) var<storage, read> clusters: array<Cluster>;
 @group(0) @binding(1) var<storage, read> vertices: array<AdaptrixVertex>;
 @group(0) @binding(2) var<storage, read> indices: array<u32>;
 
 @group(1) @binding(0) var<uniform> view: View;
-@group(1) @binding(1) var vis_buffer: texture_2d<u32>; 
+@group(1) @binding(1) var vis_buffer_hw: texture_2d<u32>;
+@group(1) @binding(2) var depth_buffer_hw: texture_depth_2d;
+@group(1) @binding(3) var vis_buffer_sw: texture_2d<u32>; // Read from storage texture as sampled/texture_2d if usage allows, else storage
 
 struct VertexOutput {
     @builtin(position) position: vec4<f32>,
@@ -36,7 +45,6 @@ struct VertexOutput {
 
 @vertex
 fn vs_main(@builtin(vertex_index) vertex_index: u32) -> VertexOutput {
-    // Generate a fullscreen triangle
     var out: VertexOutput;
     let x = f32(i32(vertex_index) / 2) * 4.0 - 1.0;
     let y = f32(i32(vertex_index) % 2) * 4.0 - 1.0;
@@ -65,42 +73,41 @@ fn get_barycentrics(p: vec3<f32>, a: vec3<f32>, b: vec3<f32>, c: vec3<f32>) -> v
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let pixel = vec2<i32>(in.position.xy);
-    let vis_data = textureLoad(vis_buffer, pixel, 0);
     
-    // vis_data.x is depth, vis_data.y is ID
-    let id = vis_data.y;
-    if (id == 0u) {
-        return vec4<f32>(0.05, 0.05, 0.07, 1.0); // Dark background
+    // 1. Read HW
+    let id_hw = textureLoad(vis_buffer_hw, pixel, 0).r;
+    let z_hw = textureLoad(depth_buffer_hw, pixel, 0); // 0.0 = near (in standard), or 0=far in reversed? Assuming standard 0..1
+
+    // 2. Read SW
+    let packed_sw = textureLoad(vis_buffer_sw, pixel, 0).r;
+    let depth_sw_u = packed_sw >> 12u;
+    let id_sw = packed_sw & 0xFFFu;
+    
+    var z_sw = 1.0;
+    if (packed_sw != 0u) {
+        z_sw = 1.0 - f32(depth_sw_u) / 1048575.0;
+    }
+
+    // 3. Compare (Standard Depth: Less is Closer)
+    var final_id = 0u;
+    var final_z = 1.0;
+    
+    if (z_hw < z_sw) {
+        final_id = id_hw;
+        final_z = z_hw;
+    } else {
+        final_id = id_sw;
+        final_z = z_sw;
+    }
+
+    if (final_id == 0u) {
+         return vec4<f32>(0.05, 0.05, 0.07, 1.0);
     }
     
-    let cluster_id = id >> 10u;
-    let triangle_id = id & 0x3FFu;
+    // Visualize ID as color
+    let r = f32((final_id * 17u) % 255u) / 255.0;
+    let g = f32((final_id * 43u) % 255u) / 255.0;
+    let b = f32((final_id * 97u) % 255u) / 255.0;
     
-    let cluster = clusters[cluster_id];
-    let i0 = indices[cluster.triangle_offset + triangle_id * 3u + 0u];
-    let i1 = indices[cluster.triangle_offset + triangle_id * 3u + 1u];
-    let i2 = indices[cluster.triangle_offset + triangle_id * 3u + 2u];
-    
-    let v0 = vertices[cluster.vertex_offset + i0];
-    let v1 = vertices[cluster.vertex_offset + i1];
-    let v2 = vertices[cluster.vertex_offset + i2];
-    
-    let depth = bitcast<f32>(vis_data.x);
-    let ndc = vec4<f32>(
-        (in.position.x / view.viewport_size.x) * 2.0 - 1.0,
-        (1.0 - in.position.y / view.viewport_size.y) * 2.0 - 1.0,
-        depth,
-        1.0
-    );
-    let world_pos_h = view.inv_view_proj * ndc;
-    let world_pos = world_pos_h.xyz / world_pos_h.w;
-    
-    let bary = get_barycentrics(world_pos, v0.position, v1.position, v2.position);
-    
-    let normal = normalize(v0.normal * bary.x + v1.normal * bary.y + v2.normal * bary.z);
-    
-    let light_dir = normalize(vec3<f32>(1.0, 1.0, 1.0));
-    let diff = max(dot(normal, light_dir), 0.0);
-    
-    return vec4<f32>(vec3<f32>(diff), 1.0);
+    return vec4<f32>(r, g, b, 1.0);
 }

@@ -267,6 +267,12 @@ impl lume_core::device::CommandBuffer for VulkanCommandBuffer {
         }
     }
 
+    fn dispatch_indirect(&mut self, buffer: &crate::VulkanBuffer, offset: u64) {
+        unsafe {
+            self.device.cmd_dispatch_indirect(self.buffer, buffer.buffer, offset);
+        }
+    }
+
     fn end_render_pass(&mut self) {
         unsafe {
             self.device.cmd_end_render_pass(self.buffer);

@@ -251,6 +251,7 @@ pub fn map_texture_format(format: lume_core::device::TextureFormat) -> vk::Forma
         lume_core::device::TextureFormat::Rgba8UnormSrgb => vk::Format::R8G8B8A8_SRGB,
         lume_core::device::TextureFormat::Rgba8Unorm => vk::Format::R8G8B8A8_UNORM,
         lume_core::device::TextureFormat::Rg32Uint => vk::Format::R32G32_UINT,
+        lume_core::device::TextureFormat::R32Uint => vk::Format::R32_UINT,
         lume_core::device::TextureFormat::Depth32Float => vk::Format::D32_SFLOAT,
     }
 }

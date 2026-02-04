@@ -52,6 +52,7 @@ fn run_compute<D: Device>(device: &D) {
 
     let layout = device.create_pipeline_layout(PipelineLayoutDescriptor {
         bind_group_layouts: &[&bind_group_layout],
+        push_constant_ranges: &[],
     }).expect("Failed to create layout");
 
     let pipeline = device.create_compute_pipeline(ComputePipelineDescriptor {

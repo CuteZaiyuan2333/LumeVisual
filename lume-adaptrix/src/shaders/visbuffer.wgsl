@@ -60,8 +60,7 @@ fn vs_main(@builtin(instance_index) instance_idx: u32, @builtin(vertex_index) ve
 // If we use textureAtomicMax, we need to pack depth and IDs.
 
 @fragment
-fn fs_main(in: VertexOutput) {
-    let depth = bitcast<u32>(in.position.z);
+fn fs_main(in: VertexOutput) -> @location(0) u32 {
     let id = (in.cluster_id << 10u) | (in.triangle_id & 0x3FFu);
-    textureStore(vis_buffer, vec2<i32>(in.position.xy), vec4<u32>(depth, id, 0u, 0u));
+    return id;
 }

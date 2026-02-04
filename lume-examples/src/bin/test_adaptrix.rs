@@ -24,8 +24,11 @@ struct AdaptrixApp {
     vertex_index_buffer: Option<lume_vulkan::VulkanBuffer>,
     primitive_index_buffer: Option<lume_vulkan::VulkanBuffer>,
     visible_clusters_buffer: Option<lume_vulkan::VulkanBuffer>,
+    sw_visible_clusters_buffer: Option<lume_vulkan::VulkanBuffer>,
+    sw_dispatch_args_buffer: Option<lume_vulkan::VulkanBuffer>,
     visible_count_buffer: Option<lume_vulkan::VulkanBuffer>,
     zero_buffer: Option<lume_vulkan::VulkanBuffer>,
+    sw_zero_buffer: Option<lume_vulkan::VulkanBuffer>,
     view_buffer: Option<lume_vulkan::VulkanBuffer>,
 
     cull_pipeline: Option<lume_vulkan::VulkanComputePipeline>,
@@ -82,7 +85,13 @@ impl AdaptrixApp {
             window: None, instance: None, surface: None, device: None, swapchain: None,
             asset: Some(asset),
             cluster_buffer: None, vertex_buffer: None, vertex_index_buffer: None, primitive_index_buffer: None,
-            visible_clusters_buffer: None, visible_count_buffer: None, zero_buffer: None, view_buffer: None,
+            visible_clusters_buffer: None, 
+            sw_visible_clusters_buffer: None,
+            sw_dispatch_args_buffer: None,
+            visible_count_buffer: None, 
+            zero_buffer: None, 
+            sw_zero_buffer: None,
+            view_buffer: None,
             cull_pipeline: None, cull_layout: None, cull_bind_group_0: None, cull_bind_group_1: None,
             vis_pipeline: None, vis_layout: None, vis_bind_group_0: None, vis_bind_group_1: None,
             resolve_pipeline: None, resolve_layout: None, resolve_bind_group_0: None, resolve_bind_group_1: None,
@@ -107,6 +116,9 @@ impl AdaptrixApp {
         self.primitive_index_buffer.as_ref().unwrap().write_data(0, asset.meshlet_primitive_indices).unwrap();
         
         self.visible_clusters_buffer = Some(device.create_buffer(BufferDescriptor { size: (asset.clusters.len() * 8).max(2048 * 1024) as u64, usage: BufferUsage::STORAGE, mapped_at_creation: true }).unwrap());
+        self.sw_visible_clusters_buffer = Some(device.create_buffer(BufferDescriptor { size: (asset.clusters.len() * 4).max(1024 * 1024) as u64, usage: BufferUsage::STORAGE, mapped_at_creation: true }).unwrap());
+        self.sw_dispatch_args_buffer = Some(device.create_buffer(BufferDescriptor { size: 16, usage: BufferUsage::STORAGE | BufferUsage::INDIRECT | BufferUsage::COPY_DST, mapped_at_creation: true }).unwrap());
+        
         self.visible_count_buffer = Some(device.create_buffer(BufferDescriptor { size: 16, usage: BufferUsage::STORAGE | BufferUsage::COPY_DST | BufferUsage::COPY_SRC | BufferUsage::INDIRECT, mapped_at_creation: true }).unwrap());
         self.visible_count_buffer.as_ref().unwrap().write_data(0, bytemuck::cast_slice(&[372u32, 0, 0, 0])).unwrap();
         
@@ -118,6 +130,15 @@ impl AdaptrixApp {
         // Correct layout for DrawArgs: vertexCount=372, instanceCount=0, firstVertex=0, firstInstance=0
         zero_buffer.write_data(0, bytemuck::cast_slice(&[372u32, 0, 0, 0])).unwrap();
         self.zero_buffer = Some(zero_buffer);
+
+        let sw_zero_buffer = device.create_buffer(BufferDescriptor {
+            size: 16,
+            usage: BufferUsage::COPY_SRC,
+            mapped_at_creation: true,
+        }).unwrap();
+        sw_zero_buffer.write_data(0, bytemuck::cast_slice(&[0u32, 1, 1, 0])).unwrap();
+        self.sw_zero_buffer = Some(sw_zero_buffer);
+
         self.view_buffer = Some(device.create_buffer(BufferDescriptor { size: 160, usage: BufferUsage::UNIFORM | BufferUsage::COPY_DST, mapped_at_creation: true }).unwrap());
 
         self.vis_buffer_texture = Some(device.create_texture(TextureDescriptor { width: size.width, height: size.height, depth: 1, format: TextureFormat::Rg32Uint, usage: TextureUsage::RENDER_ATTACHMENT | TextureUsage::TEXTURE_BINDING }).unwrap());
@@ -134,8 +155,10 @@ impl AdaptrixApp {
         // Cull
         let bgl_c0 = device.create_bind_group_layout(BindGroupLayoutDescriptor { entries: vec![
             BindGroupLayoutEntry { binding: 0, visibility: ShaderStage::COMPUTE, ty: BindingType::StorageBuffer },
-            BindGroupLayoutEntry { binding: 1, visibility: ShaderStage::COMPUTE, ty: BindingType::StorageBuffer },
+            BindGroupLayoutEntry { binding: 3, visibility: ShaderStage::COMPUTE, ty: BindingType::StorageBuffer },
             BindGroupLayoutEntry { binding: 5, visibility: ShaderStage::COMPUTE, ty: BindingType::StorageBuffer },
+            BindGroupLayoutEntry { binding: 6, visibility: ShaderStage::COMPUTE, ty: BindingType::StorageBuffer },
+            BindGroupLayoutEntry { binding: 7, visibility: ShaderStage::COMPUTE, ty: BindingType::StorageBuffer },
         ] }).unwrap();
         let bgl_c1 = device.create_bind_group_layout(BindGroupLayoutDescriptor { entries: vec![BindGroupLayoutEntry { binding: 0, visibility: ShaderStage::COMPUTE, ty: BindingType::UniformBuffer }] }).unwrap();
         let l_cull = device.create_pipeline_layout(PipelineLayoutDescriptor { 
@@ -145,8 +168,10 @@ impl AdaptrixApp {
         self.cull_pipeline = Some(device.create_compute_pipeline(ComputePipelineDescriptor { shader: &cull_module, layout: &l_cull }).unwrap());
         self.cull_bind_group_0 = Some(device.create_bind_group(BindGroupDescriptor { layout: &bgl_c0, entries: vec![
             BindGroupEntry { binding: 0, resource: BindingResource::Buffer(self.cluster_buffer.as_ref().unwrap()) },
-            BindGroupEntry { binding: 1, resource: BindingResource::Buffer(self.visible_clusters_buffer.as_ref().unwrap()) },
+            BindGroupEntry { binding: 3, resource: BindingResource::Buffer(self.visible_clusters_buffer.as_ref().unwrap()) },
             BindGroupEntry { binding: 5, resource: BindingResource::Buffer(self.visible_count_buffer.as_ref().unwrap()) },
+            BindGroupEntry { binding: 6, resource: BindingResource::Buffer(self.sw_visible_clusters_buffer.as_ref().unwrap()) },
+            BindGroupEntry { binding: 7, resource: BindingResource::Buffer(self.sw_dispatch_args_buffer.as_ref().unwrap()) },
         ] }).unwrap());
         self.cull_bind_group_1 = Some(device.create_bind_group(BindGroupDescriptor { layout: &bgl_c1, entries: vec![BindGroupEntry { binding: 0, resource: BindingResource::Buffer(self.view_buffer.as_ref().unwrap()) }] }).unwrap());
         self.cull_layout = Some(l_cull);
@@ -261,6 +286,7 @@ impl ApplicationHandler for AdaptrixApp {
                     cmd.reset().unwrap(); cmd.begin().unwrap();
                     
                     cmd.copy_buffer_to_buffer(self.zero_buffer.as_ref().unwrap(), self.visible_count_buffer.as_ref().unwrap(), 16);
+                    cmd.copy_buffer_to_buffer(self.sw_zero_buffer.as_ref().unwrap(), self.sw_dispatch_args_buffer.as_ref().unwrap(), 16);
                     cmd.compute_barrier();
 
                     cmd.bind_compute_pipeline(self.cull_pipeline.as_ref().unwrap());
